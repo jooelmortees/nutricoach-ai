@@ -71,7 +71,7 @@ supabase functions deploy mcp-router
 ```
 
 ### 3. Configurar Apple Developer
-1. Crea un **App ID** en https://developer.apple.com/account con bundle ID `com.nutricoach.app`
+1. Crea un **App ID** en https://developer.apple.com/account con bundle ID `com.joelmortees.nutricoach`
 2. Habilita los entitlements: HealthKit, Camera, Background Modes
 3. Genera un **App Store Connect API Key** (.p8) en https://appstoreconnect.apple.com
 4. Mete los valores en GitHub Secrets (ver paso 4)

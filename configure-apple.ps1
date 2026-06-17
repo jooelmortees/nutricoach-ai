@@ -21,7 +21,7 @@ Uso: .\configure-apple.ps1 [-P8Path <ruta-al-p8>]
 Si no pasas -P8Path, el script te preguntará interactivamente.
 
 Pasos previos que TIENES que haber hecho:
-  1. Crear App ID 'com.nutricoach.app' en developer.apple.com
+  1. Crear App ID 'com.joelmortees.nutricoach' en developer.apple.com
   2. Generar API Key (.p8) en appstoreconnect.apple.com/access/api
 
 Este script:

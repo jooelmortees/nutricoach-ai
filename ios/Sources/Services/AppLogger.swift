@@ -6,7 +6,7 @@ import Foundation
 import os
 
 enum AppLogger {
-    private static let subsystem = Bundle.main.bundleIdentifier ?? "com.nutricoach.app"
+    private static let subsystem = Bundle.main.bundleIdentifier ?? "com.joelmortees.nutricoach"
     private static let logger = Logger(subsystem: subsystem, category: "general")
 
     static func debug(_ message: String) {

@@ -36,7 +36,7 @@ jobs:
     timeout-minutes: 30
 
     env:
-      BUNDLE_ID: ${{ vars.APPLE_BUNDLE_ID || 'com.nutricoach.app' }}
+      BUNDLE_ID: ${{ vars.APPLE_BUNDLE_ID || 'com.joelmortees.nutricoach' }}
       DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
       KEYCHAIN_PASSWORD: ${{ github.run_id }}-kc-pwd
 

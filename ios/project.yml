@@ -73,7 +73,7 @@ targets:
         LSRequiresIPhoneOS: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.nutricoach.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.joelmortees.nutricoach
         TARGETED_DEVICE_FAMILY: "1"
         ENABLE_PREVIEWS: YES
         DEVELOPMENT_ASSET_PATHS: ""
@@ -109,6 +109,6 @@ targets:
       - target: NutriCoach
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.nutricoach.app.tests
+        PRODUCT_BUNDLE_IDENTIFIER: com.joelmortees.nutricoach.tests
         BUNDLE_LOADER: "$(TEST_HOST)"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/NutriCoach.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NutriCoach"
