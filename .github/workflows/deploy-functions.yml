@@ -1,0 +1,75 @@
+# ============================================================
+# Deploy Edge Functions a Supabase
+# Se ejecuta manualmente o al hacer push a main
+# ============================================================
+
+name: Deploy Edge Functions
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "backend/functions/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy to Supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Supabase CLI
+        run: npm install -g supabase
+
+      - name: Link Supabase project
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          supabase link --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy chat-proxy
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          MINIMAX_BASE_URL: ${{ vars.MINIMAX_BASE_URL || 'https://api.minimax.io/anthropic' }}
+          MINIMAX_MODEL: ${{ vars.MINIMAX_MODEL || 'MiniMax-M3' }}
+          USDA_FDC_API_KEY: ${{ secrets.USDA_FDC_API_KEY }}
+        run: |
+          supabase functions deploy chat-proxy \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt=false
+
+      - name: Deploy hk-sync
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: supabase functions deploy hk-sync --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy mcp-router
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: supabase functions deploy mcp-router --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Summary
+        run: |
+          echo "✅ Edge Functions desplegadas"
+          echo "Endpoints:"
+          echo "  https://${{ secrets.SUPABASE_PROJECT_REF }}.supabase.co/functions/v1/chat-proxy"
+          echo "  https://${{ secrets.SUPABASE_PROJECT_REF }}.supabase.co/functions/v1/hk-sync"
+          echo "  https://${{ secrets.SUPABASE_PROJECT_REF }}.supabase.co/functions/v1/mcp-router"
