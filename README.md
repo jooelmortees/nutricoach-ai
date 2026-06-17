@@ -2,7 +2,19 @@
 
 App iOS nativa con un agente IA dietista-nutricionista potenciado por **MiniMax-M3**, conectado a Apple HealthKit, con memoria persistente, visión nativa para análisis de comida, y MCPs especializados en nutrición, fitness y salud.
 
-> Estado: **Fase 0 — Setup y andamiaje**. El "hola mundo" con chat conectado a M3 está en marcha.
+> Estado: **Fase 1 — Configurando Supabase**. DB lista, falta Edge Functions + secrets.
+
+## Estado actual (Jun 2026)
+
+- ✅ **Repo GitHub**: [jooelmortees/nutricoach-ai](https://github.com/jooelmortees/nutricoach-ai) (privado)
+- ✅ **Supabase DB**: proyecto `NutriCoach-DB` (ref `oqkctjzaojyevdxvavaj`, region eu-west-1)
+  - 13 tablas creadas con RLS estricto
+  - 3 storage buckets (meal-photos, meal-videos privados + avatars público)
+  - pgvector habilitado (memoria semántica)
+  - Realtime en 4 tablas (messages, meals, health_metrics, scheduled_nudges)
+- ✅ **Edge Functions**: código escrito (chat-proxy, hk-sync, mcp-router + 7 MCPs)
+- ⏳ **Pendiente**: desplegar Edge Functions, configurar secrets, primer build iOS
+- ⏳ **Pendiente de ti**: API key MiniMax, Apple Developer certs, service_role key
 
 ## Arquitectura en 30 segundos
 
