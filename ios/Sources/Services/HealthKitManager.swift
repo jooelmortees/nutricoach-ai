@@ -22,7 +22,7 @@ final class HealthKitManager: ObservableObject {
             .heartRateVariabilitySDNN, .vo2Max,
             .stepCount, .distanceWalkingRunning, .distanceCycling,
             .activeEnergyBurned, .basalEnergyBurned, .flightsClimbed,
-            .bodyMass, .bodyFatPercentage, .bloodOxygen,
+            .bodyMass, .bodyFatPercentage, .oxygenSaturation,
             .bodyTemperature, .respiratoryRate,
             .appleExerciseTime, .appleMoveTime, .appleStandTime,
         ]
@@ -72,28 +72,36 @@ final class HealthKitManager: ObservableObject {
         isAuthorized = true
     }
 
-    /// Sincroniza los últimos N días de HealthKit a Supabase vía Edge Function
-    func syncToBackend(days: Int = 7) async throws {
-        let end = Date()
-        let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
+    /// Sincroniza los últimos N días de HealthKit a Supabase vía Edge Function.
+    /// Captura errores internamente y los publica en `lastError` para que las
+    /// vistas no tengan que propagar `try` por encima.
+    func syncToBackend(days: Int = 7) async {
+        do {
+            let end = Date()
+            let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
 
-        let metrics = try await collectMetrics(from: start, to: end)
+            let metrics = try await collectMetrics(from: start, to: end)
 
-        // Enviar al backend
-        let url = Config.hkSyncURL
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(try await getAccessToken())", forHTTPHeaderField: "Authorization")
-        req.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
-        req.httpBody = try JSONEncoder().encode(["metrics": metrics])
+            // Enviar al backend
+            let url = Config.hkSyncURL
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue("Bearer \(try await getAccessToken())", forHTTPHeaderField: "Authorization")
+            req.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+            req.httpBody = try JSONEncoder().encode(HealthSyncRequest(metrics: metrics))
 
-        let (data, response) = try await URLSession.shared.data(for: req)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? "?"
-            throw HealthKitError.syncFailed(body)
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                let body = String(data: data, encoding: .utf8) ?? "?"
+                throw HealthKitError.syncFailed(body)
+            }
+            AppLogger.info("HealthKit sync OK: \(metrics.count) métricas")
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+            AppLogger.warning("HealthKit sync fallo: \(error.localizedDescription)")
         }
-        AppLogger.info("HealthKit sync OK: \(metrics.count) métricas")
     }
 
     private func getAccessToken() async throws -> String {
@@ -101,12 +109,12 @@ final class HealthKitManager: ObservableObject {
         return session.accessToken
     }
 
-    private func collectMetrics(from start: Date, to end: Date) async throws -> [[String: Any]] {
-        var out: [[String: Any]] = []
+    private func collectMetrics(from start: Date, to end: Date) async throws -> [HealthMetricPayload] {
+        var out: [HealthMetricPayload] = []
         let quantityTypes: [HKQuantityTypeIdentifier] = [
             .heartRate, .restingHeartRate, .vo2Max, .stepCount,
             .activeEnergyBurned, .basalEnergyBurned, .bodyMass,
-            .bloodOxygen, .respiratoryRate,
+            .oxygenSaturation, .respiratoryRate,
         ]
         for id in quantityTypes {
             let samples = try await queryQuantity(id: id, from: start, to: end)
@@ -118,12 +126,17 @@ final class HealthKitManager: ObservableObject {
         return out
     }
 
-    private func queryQuantity(id: HKQuantityTypeIdentifier, from start: Date, to end: Date) async throws -> [[String: Any]] {
+    private func queryQuantity(id: HKQuantityTypeIdentifier, from start: Date, to end: Date) async throws -> [HealthMetricPayload] {
         guard let type = HKQuantityType.quantityType(forIdentifier: id) else { return [] }
         let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+
+        let capturedType = type
+        let capturedId = id
+        let dateFormatter = ISO8601DateFormatter()
+
         return try await withCheckedThrowingContinuation { continuation in
             let query = HKSampleQuery(
-                sampleType: type,
+                sampleType: capturedType,
                 predicate: predicate,
                 limit: HKObjectQueryNoLimit,
                 sortDescriptors: nil
@@ -132,13 +145,19 @@ final class HealthKitManager: ObservableObject {
                     continuation.resume(throwing: error)
                     return
                 }
-                let result: [[String: Any]] = (samples as? [HKQuantitySample] ?? []).map { s in
-                    [
-                        "type": id.rawValue.replacingOccurrences(of: "HKQuantityTypeIdentifier", with: ""),
-                        "value": s.quantity.doubleValue(for: HKUnit(from: s.unit)),
-                        "unit": s.unit.unitString,
-                        "recorded_at": ISO8601DateFormatter().string(from: s.startDate),
-                    ]
+                guard let quantitySamples = samples as? [HKQuantitySample] else {
+                    continuation.resume(returning: [])
+                    return
+                }
+                let typeName = capturedId.rawValue.replacingOccurrences(of: "HKQuantityTypeIdentifier", with: "")
+                let result: [HealthMetricPayload] = quantitySamples.map { sample in
+                    let unit = HKUnit(from: sample.unit)
+                    return HealthMetricPayload(
+                        type: typeName,
+                        value: sample.quantity.doubleValue(for: unit),
+                        unit: sample.unit.unitString,
+                        recorded_at: dateFormatter.string(from: sample.startDate)
+                    )
                 }
                 continuation.resume(returning: result)
             }
@@ -146,9 +165,10 @@ final class HealthKitManager: ObservableObject {
         }
     }
 
-    private func querySleep(from start: Date, to end: Date) async throws -> [[String: Any]] {
+    private func querySleep(from start: Date, to end: Date) async throws -> [HealthMetricPayload] {
         guard let type = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else { return [] }
         let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+
         return try await withCheckedThrowingContinuation { continuation in
             let query = HKSampleQuery(
                 sampleType: type,
@@ -160,20 +180,26 @@ final class HealthKitManager: ObservableObject {
                     continuation.resume(throwing: error)
                     return
                 }
+                guard let categorySamples = samples as? [HKCategorySample] else {
+                    continuation.resume(returning: [])
+                    return
+                }
                 var total: TimeInterval = 0
-                for sample in (samples as? [HKCategorySample] ?? []) {
+                for sample in categorySamples {
                     total += sample.endDate.timeIntervalSince(sample.startDate)
                 }
                 guard total > 0 else {
                     continuation.resume(returning: [])
                     return
                 }
-                continuation.resume(returning: [[
-                    "type": "sleep_minutes",
-                    "value": Int(total / 60),
-                    "unit": "minutes",
-                    "recorded_at": ISO8601DateFormatter().string(from: end),
-                ]])
+                let recordedAt = ISO8601DateFormatter().string(from: end)
+                let payload = HealthMetricPayload(
+                    type: "sleep_minutes",
+                    value: Double(Int(total / 60)),
+                    unit: "minutes",
+                    recorded_at: recordedAt
+                )
+                continuation.resume(returning: [payload])
             }
             store.execute(query)
         }
@@ -190,4 +216,17 @@ enum HealthKitError: LocalizedError {
         case .syncFailed(let msg): return "Error sincronizando con HealthKit: \(msg)"
         }
     }
+}
+
+// MARK: - Payloads Encodable para la Edge Function hk-sync
+
+struct HealthMetricPayload: Encodable {
+    let type: String
+    let value: Double
+    let unit: String
+    let recorded_at: String
+}
+
+struct HealthSyncRequest: Encodable {
+    let metrics: [HealthMetricPayload]
 }

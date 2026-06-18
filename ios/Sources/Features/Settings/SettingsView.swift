@@ -38,7 +38,7 @@ struct SettingsView: View {
 
                 Section("Salud") {
                     Button {
-                        Task { try? await HealthKitManager.shared.syncToBackend(days: 30) }
+                        Task { await HealthKitManager.shared.syncToBackend(days: 30) }
                     } label: {
                         Label("Sincronizar HealthKit ahora", systemImage: "arrow.triangle.2.circlepath")
                     }

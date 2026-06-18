@@ -152,7 +152,7 @@ final class DashboardViewModel: ObservableObject {
                 let meal_count: Int?
             }
             let today = ISO8601DateFormatter().string(from: Date()).prefix(10)
-            let response: Summary = try await supabase
+            let _: Summary = try await supabase
                 .rpc("get_daily_summary", params: ["p_date": String(today)])
                 .execute()
                 .value
