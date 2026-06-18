@@ -133,6 +133,7 @@ final class HealthKitManager: ObservableObject {
         let capturedType = type
         let capturedId = id
         let dateFormatter = ISO8601DateFormatter()
+        let unit = Self.preferredUnit(for: capturedId)
 
         return try await withCheckedThrowingContinuation { continuation in
             let query = HKSampleQuery(
@@ -151,17 +152,46 @@ final class HealthKitManager: ObservableObject {
                 }
                 let typeName = capturedId.rawValue.replacingOccurrences(of: "HKQuantityTypeIdentifier", with: "")
                 let result: [HealthMetricPayload] = quantitySamples.map { sample in
-                    let unit = HKUnit(from: sample.unit)
-                    return HealthMetricPayload(
+                    HealthMetricPayload(
                         type: typeName,
                         value: sample.quantity.doubleValue(for: unit),
-                        unit: sample.unit.unitString,
+                        unit: unit.unitString,
                         recorded_at: dateFormatter.string(from: sample.startDate)
                     )
                 }
                 continuation.resume(returning: result)
             }
             store.execute(query)
+        }
+    }
+
+    /// Unit canónica por identificador. HealthKit no expone `sample.unit` en
+    /// `HKQuantitySample`: hay que derivarlo del tipo. Mapeamos los más comunes
+    /// a units legibles; el resto cae a `.count()`.
+    private static func preferredUnit(for id: HKQuantityTypeIdentifier) -> HKUnit {
+        switch id {
+        case .stepCount, .flightsClimbed, .appleExerciseTime,
+             .appleMoveTime, .appleStandTime:
+            return .count()
+        case .heartRate, .restingHeartRate, .walkingHeartRateAverage,
+             .respiratoryRate:
+            return HKUnit.count().unitDivided(by: .minute())
+        case .heartRateVariabilitySDNN:
+            return .secondUnit(with: .milli)
+        case .vo2Max:
+            return HKUnit.literUnit(with: .milli).unitDivided(by: .gramUnit(with: .kilo).unitMultiplied(by: .minute()))
+        case .activeEnergyBurned, .basalEnergyBurned:
+            return .kilocalorie()
+        case .distanceWalkingRunning, .distanceCycling:
+            return .meter()
+        case .bodyMass:
+            return .gramUnit(with: .kilo)
+        case .bodyFatPercentage, .oxygenSaturation:
+            return .percent()
+        case .bodyTemperature:
+            return .degreeCelsius()
+        default:
+            return .count()
         }
     }
 
