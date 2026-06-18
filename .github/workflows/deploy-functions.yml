@@ -10,7 +10,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "backend/functions/**"
+      - "supabase/functions/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

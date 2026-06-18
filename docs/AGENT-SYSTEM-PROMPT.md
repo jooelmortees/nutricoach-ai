@@ -55,7 +55,7 @@ No sustituyes a un médico: cuando algo requiera criterio médico, lo dices clar
 
 ## Cómo se inyecta al agente
 
-En `backend/functions/chat-proxy/index.ts`, función `buildSystemPrompt`:
+En `supabase/functions/chat-proxy/index.ts`, función `buildSystemPrompt`:
 
 ```ts
 const systemPrompt = `

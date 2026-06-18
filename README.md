@@ -35,7 +35,7 @@ Más detalle en [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 ```
 nutricoach-ai/
 ├── ios/                  # Proyecto Xcode (generable con XcodeGen)
-├── backend/              # Edge Functions + migraciones SQL
+├── supabase/             # Edge Functions + migraciones SQL (estructura estándar de Supabase CLI)
 ├── docs/                 # Arquitectura, system prompt del agente, onboarding
 ├── .github/workflows/    # Build iOS en macos-15-arm64
 ├── .env.example          # Plantilla de variables de entorno
