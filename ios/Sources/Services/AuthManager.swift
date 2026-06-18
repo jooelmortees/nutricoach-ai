@@ -44,16 +44,17 @@ final class AuthManager: ObservableObject {
     }
 
     func signUp(email: String, password: String, fullName: String?) async throws {
-        let signUpOptions = AuthOptions(
-            data: fullName.map { ["full_name": .string($0)] }
-        )
-        let session = try await supabase.auth.signUp(
+        var userData: [String: AnyJSON]? = nil
+        if let name = fullName, !name.isEmpty {
+            userData = ["full_name": .string(name)]
+        }
+        let response = try await supabase.auth.signUp(
             email: email,
             password: password,
-            options: signUpOptions
+            data: userData
         )
-        await loadProfile(userId: session.user.id)
-        state = .signedIn(user: session.user)
+        await loadProfile(userId: response.user.id)
+        state = .signedIn(user: response.user)
     }
 
     func signOut() async {
