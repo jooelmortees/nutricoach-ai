@@ -43,11 +43,12 @@ final class AgentService: ObservableObject {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             req.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
-            req.httpBody = try JSONEncoder().encode([
-                "conversation_id": conversationId,
-                "message": message,
-                "attachments": attachments.map { ["type": $0.type, "url": $0.url] },
-            ])
+            let body = AgentRequest(
+                conversation_id: conversationId,
+                message: message,
+                attachments: attachments
+            )
+            req.httpBody = try JSONEncoder().encode(body)
 
             let (bytes, response) = try await session.bytes(for: req)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -106,7 +107,13 @@ final class AgentService: ObservableObject {
     }
 }
 
-struct AgentAttachment {
+struct AgentAttachment: Encodable {
     let type: String  // "image" | "video"
     let url: String
+}
+
+struct AgentRequest: Encodable {
+    let conversation_id: String
+    let message: String
+    let attachments: [AgentAttachment]
 }
