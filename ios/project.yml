@@ -1,3 +1,8 @@
+# ============================================================
+# project.yml - XcodeGen
+# Define el proyecto Xcode que se generará en GitHub Actions
+# ============================================================
+
 name: NutriCoach
 options:
   bundleIdPrefix: com.nutricoach
@@ -5,6 +10,8 @@ options:
     iOS: "17.0"
   developmentLanguage: es
   createIntermediateGroups: true
+  generateEmptyDirectories: true
+  groupSortPosition: top
   defaultConfig: Debug
   xcodeVersion: "16.0"
 
@@ -13,10 +20,19 @@ settings:
     SWIFT_VERSION: "5.9"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+    GCC_TREAT_WARNINGS_AS_ERRORS: NO
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "Apple Development"
+
+packages:
+  Supabase:
+    url: https://github.com/supabase/supabase-swift
+    from: 2.41.0
+  KeychainAccess:
+    url: https://github.com/kishikawakatsumi/KeychainAccess
+    from: 4.2.2
 
 targets:
   NutriCoach:
@@ -34,12 +50,25 @@ targets:
         CFBundleDisplayName: NutriCoach
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
+        UILaunchScreen:
+          UIColorName: ""
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UIRequiredDeviceCapabilities:
           - arm64
+        UIBackgroundModes:
+          - fetch
+          - processing
+        NSHealthShareUsageDescription: "NutriCoach necesita acceso a tu salud (pasos, frecuencia cardíaca, sueño, entrenamientos) para personalizar tu dieta."
+        NSHealthUpdateUsageDescription: "NutriCoach registra en Apple Health las comidas y métricas que llevas un seguimiento."
+        NSCameraUsageDescription: "Necesitamos la cámara para fotografiar tus comidas y que el agente las analice."
+        NSPhotoLibraryUsageDescription: "Para que puedas elegir fotos de tus comidas desde la galería."
+        NSPhotoLibraryAddUsageDescription: "Para guardar en tu galería las recetas e informes que generes."
+        NSMicrophoneUsageDescription: "Reservado para futuras funciones de audio."
+        NSLocationWhenInUseUsageDescription: "Opcional: para registrar dónde comes y detectar restaurantes frecuentes."
+        NSUserNotificationUsageDescription: "Para enviarte recordatorios de comidas, hidratación y entrenamiento."
         ITSAppUsesNonExemptEncryption: false
         LSRequiresIPhoneOS: true
     settings:
@@ -47,7 +76,28 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.joelmortees.nutricoach
         TARGETED_DEVICE_FAMILY: "1"
         ENABLE_PREVIEWS: YES
+        DEVELOPMENT_ASSET_PATHS: ""
         GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    entitlements:
+      path: Sources/Resources/NutriCoach.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access:
+          - health-records
+        com.apple.developer.applesignin:
+          - default
+        aps-environment: development
+    dependencies:
+      - package: Supabase
+        product: Supabase
+      - package: KeychainAccess
+      - sdk: HealthKit.framework
+      - sdk: AVFoundation.framework
+      - sdk: UserNotifications.framework
+      - sdk: AuthenticationServices.framework
 
   NutriCoachTests:
     type: bundle.unit-test
