@@ -41,17 +41,24 @@ workflows:
       - name: Build (Debug, no signing)
         script: |
           mkdir -p build
+          # Probar varias configuraciones para forzar el binario principal.
+          # Primero intentar sin ENABLE_DEBUG_DYLIB y con -skipPackagePluginValidation
           xcodebuild \
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach \
             -configuration Debug \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build/DerivedData \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            ENABLE_PREVIEWS=NO \
+            SWIFT_ENABLE_PREVIEWS=NO \
             ENABLE_DEBUG_DYLIB=NO \
-            build | tee build/xcodebuild.log
+            GENERATE_INFOPLIST_FILE=NO \
+            build 2>&1 | tee build/xcodebuild.log | tail -60
       - name: Debug build output
         script: |
           echo "=== Products dir ==="
@@ -71,6 +78,11 @@ workflows:
           echo "App path: $APP_PATH"
           if [ -z "$APP_PATH" ]; then
             echo "ERROR: no se encontro NutriCoach.app"
+            exit 1
+          fi
+          if [ ! -f "$APP_PATH/NutriCoach" ]; then
+            echo "ERROR: el binario NutriCoach no existe en el .app"
+            ls -la "$APP_PATH"
             exit 1
           fi
           rm -rf build/Payload
