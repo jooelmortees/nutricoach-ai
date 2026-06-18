@@ -10,7 +10,6 @@ workflows:
     name: iOS Debug
     max_build_duration: 60
     environment:
-      flutter: none
       xcode: latest
       cocoapods: default
     triggering:
@@ -72,7 +71,6 @@ workflows:
     name: iOS Signed (for sideloadly)
     max_build_duration: 60
     environment:
-      flutter: none
       xcode: latest
       cocoapods: default
       groups:
