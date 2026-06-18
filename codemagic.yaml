@@ -93,10 +93,11 @@ workflows:
             ls -la "$APP_PATH"
             exit 1
           fi
-          # Sin code signing, xcodebuild no copia los frameworks de SPM
-          # al bundle .app. Los copiamos manualmente desde PackageFrameworks.
+          # En Xcode 26 con SPM, los frameworks se linkean estaticamente al
+          # binario (PackageFrameworks queda vacio). Es el comportamiento
+          # normal y esperado, asi que solo copiamos si hay algo.
           PKG_FW_DIR=$(dirname "$APP_PATH")/PackageFrameworks
-          if [ -d "$PKG_FW_DIR" ]; then
+          if [ -d "$PKG_FW_DIR" ] && [ -n "$(ls -A "$PKG_FW_DIR" 2>/dev/null)" ]; then
             echo "=== PackageFrameworks contents ==="
             ls -la "$PKG_FW_DIR"
             mkdir -p "$APP_PATH/Frameworks"
@@ -104,20 +105,10 @@ workflows:
             echo "=== Frameworks copiados al .app ==="
             ls -la "$APP_PATH/Frameworks"
           else
-            echo "WARN: no existe $PKG_FW_DIR (sin frameworks que copiar)"
-          fi
-          # Tambien copiar la Swift toolchain dylibs si existen en Toolchain
-          TOOLCHAIN_FW=$(find build/DerivedData -type d -name "Toolchain" 2>/dev/null | head -1)
-          if [ -n "$TOOLCHAIN_FW" ] && [ -d "$TOOLCHAIN_FW" ]; then
-            echo "=== Toolchain dylibs encontrados ==="
-            find "$TOOLCHAIN_FW" -name "*.dylib" 2>/dev/null | head -10
-            cp -R "$TOOLCHAIN_FW"/* "$APP_PATH/Frameworks/" 2>/dev/null || true
+            echo "INFO: PackageFrameworks vacio (Xcode 26 linkea SPM estaticamente)"
           fi
           echo "=== App bundle final ==="
           ls -la "$APP_PATH"
-          echo ""
-          echo "=== Frameworks en el .app ==="
-          ls -la "$APP_PATH/Frameworks" 2>&1 || echo "SIN FRAMEWORKS"
           echo ""
           echo "=== App size ==="
           du -sh "$APP_PATH"
@@ -125,6 +116,8 @@ workflows:
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
           cd build && zip -qr NutriCoach-Debug-unsigned.ipa Payload && cd ..
+          echo ""
+          echo "=== IPA final ==="
           ls -lh build/NutriCoach-Debug-unsigned.ipa
     artifacts:
       - build/NutriCoach-Debug-unsigned.ipa
