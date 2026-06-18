@@ -12,6 +12,8 @@ workflows:
     environment:
       xcode: latest
       cocoapods: default
+      groups:
+        - Supabase
     triggering:
       events:
         - push
