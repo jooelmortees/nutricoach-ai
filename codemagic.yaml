@@ -40,6 +40,7 @@ workflows:
             -scheme NutriCoach
       - name: Build (Debug, no signing)
         script: |
+          mkdir -p build
           xcodebuild \
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach \
@@ -101,6 +102,7 @@ workflows:
             -scheme NutriCoach
       - name: Build (Release, signed)
         script: |
+          mkdir -p build
           xcodebuild \
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach \
