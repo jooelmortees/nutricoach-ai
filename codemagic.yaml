@@ -55,9 +55,10 @@ workflows:
         script: |
           APP_PATH=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
           echo "App path: $APP_PATH"
+          rm -rf build/Payload
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
-          cd build && zip -qr NutriCoach-Debug-unsigned.ipa Payload
+          zip -qr build/NutriCoach-Debug-unsigned.ipa build/Payload
           ls -lh build/NutriCoach-Debug-unsigned.ipa
     artifacts:
       - build/NutriCoach-Debug-unsigned.ipa
@@ -119,9 +120,10 @@ workflows:
         script: |
           APP_PATH=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
           echo "App path: $APP_PATH"
+          rm -rf build/Payload
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
-          cd build && zip -qr NutriCoach-Release.ipa Payload
+          zip -qr build/NutriCoach-Release.ipa build/Payload
           ls -lh build/NutriCoach-Release.ipa
     artifacts:
       - build/NutriCoach-Release.ipa
