@@ -80,6 +80,28 @@ workflows:
           echo ""
           echo "=== App size ==="
           du -sh build/DerivedData/Build/Products/Debug-iphoneos/NutriCoach.app 2>&1 || echo "NO EXISTE"
+      - name: Inject env vars into Info.plist
+        script: |
+          APP_PATH=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: no se encontro NutriCoach.app para inyectar env vars"
+            exit 1
+          fi
+          PLIST="$APP_PATH/Info.plist"
+          if [ ! -f "$PLIST" ]; then
+            echo "ERROR: no existe $PLIST"
+            exit 1
+          fi
+          echo "=== Inyectando env vars en $PLIST ==="
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "ERROR: SUPABASE_URL y/o SUPABASE_ANON_KEY no estan definidas en Codemagic env vars"
+            echo "Configuralas en: Codemagic UI > Settings > Environment variables"
+            exit 1
+          fi
+          /usr/libexec/PlistBuddy -c "Set :SUPABASE_URL $SUPABASE_URL" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :SUPABASE_ANON_KEY $SUPABASE_ANON_KEY" "$PLIST"
+          echo "=== Info.plist actualizado ==="
+          /usr/libexec/PlistBuddy -c "Print" "$PLIST" | grep -E "SUPABASE_" || echo "(sin valores SUPABASE_)"
       - name: Create IPA (no signing)
         script: |
           APP_PATH=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
