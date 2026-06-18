@@ -51,10 +51,27 @@ workflows:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build | tee build/xcodebuild.log
+      - name: Debug build output
+        script: |
+          echo "=== Products dir ==="
+          ls -la build/DerivedData/Build/Products/Debug-iphoneos/ 2>&1 || echo "NO EXISTE"
+          echo ""
+          echo "=== App bundle ==="
+          ls -la build/DerivedData/Build/Products/Debug-iphoneos/NutriCoach.app/ 2>&1 || echo "NO EXISTE"
+          echo ""
+          echo "=== Binary info ==="
+          file build/DerivedData/Build/Products/Debug-iphoneos/NutriCoach.app/NutriCoach 2>&1 || echo "NO EXISTE"
+          echo ""
+          echo "=== App size ==="
+          du -sh build/DerivedData/Build/Products/Debug-iphoneos/NutriCoach.app 2>&1 || echo "NO EXISTE"
       - name: Create IPA (no signing)
         script: |
           APP_PATH=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
           echo "App path: $APP_PATH"
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: no se encontro NutriCoach.app"
+            exit 1
+          fi
           rm -rf build/Payload
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
