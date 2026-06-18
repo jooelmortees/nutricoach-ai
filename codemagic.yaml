@@ -45,12 +45,12 @@ workflows:
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach \
             -configuration Debug \
-            -sdk iphoneos \
-            -arch arm64 \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            ENABLE_DEBUG_DYLIB=NO \
             build | tee build/xcodebuild.log
       - name: Debug build output
         script: |
@@ -126,8 +126,7 @@ workflows:
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach \
             -configuration Release \
-            -sdk iphoneos \
-            -arch arm64 \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath build/DerivedData \
             -allowProvisioningUpdates \
             CODE_SIGN_STYLE=Manual \
