@@ -21,6 +21,8 @@ workflows:
           include: true
         - pattern: 'feat/*'
           include: true
+        - pattern: 'test/*'
+          include: true
     scripts:
       - name: Set up Ruby + CocoaPods
         script: |
