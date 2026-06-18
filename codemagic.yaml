@@ -81,7 +81,6 @@ workflows:
     triggering:
       events:
         - push
-        - workflow_dispatch
       branch_patterns:
         - pattern: 'main'
           include: true
