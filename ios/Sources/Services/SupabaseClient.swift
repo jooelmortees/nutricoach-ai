@@ -13,14 +13,7 @@ final class SupabaseService {
     private init() {
         self.client = SupabaseClient(
             supabaseURL: Config.supabaseURL,
-            supabaseKey: Config.supabaseAnonKey,
-            options: SupabaseClientOptions(
-                auth: .init(
-                    autoRefreshToken: true,
-                    persistSession: true,
-                    detectSessionInUrl: false
-                )
-            )
+            supabaseKey: Config.supabaseAnonKey
         )
     }
 }

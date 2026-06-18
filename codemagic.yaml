@@ -41,8 +41,7 @@ workflows:
       - name: Build (Debug, no signing)
         script: |
           mkdir -p build
-          # Probar varias configuraciones para forzar el binario principal.
-          # Primero intentar sin ENABLE_DEBUG_DYLIB y con -skipPackagePluginValidation
+          set -o pipefail
           xcodebuild \
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach \
@@ -58,7 +57,16 @@ workflows:
             SWIFT_ENABLE_PREVIEWS=NO \
             ENABLE_DEBUG_DYLIB=NO \
             GENERATE_INFOPLIST_FILE=NO \
-            build 2>&1 | tee build/xcodebuild.log | tail -60
+            build > build/xcodebuild.log 2>&1
+          EXIT=$?
+          echo "=== BUILD EXIT CODE: $EXIT ==="
+          echo ""
+          echo "=== Errores de compilacion (si los hay) ==="
+          grep -E "error:|warning:|cannot find|use of unresolved|expected" build/xcodebuild.log | head -40 || echo "(sin errores/warnings)"
+          echo ""
+          echo "=== Ultimas 30 lineas del log ==="
+          tail -30 build/xcodebuild.log
+          exit $EXIT
       - name: Debug build output
         script: |
           echo "=== Products dir ==="
