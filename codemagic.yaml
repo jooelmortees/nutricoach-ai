@@ -45,7 +45,8 @@ workflows:
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach \
             -configuration Debug \
-            -destination 'generic/platform=iOS' \
+            -sdk iphoneos \
+            -arch arm64 \
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -125,7 +126,8 @@ workflows:
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach \
             -configuration Release \
-            -destination 'generic/platform=iOS' \
+            -sdk iphoneos \
+            -arch arm64 \
             -derivedDataPath build/DerivedData \
             -allowProvisioningUpdates \
             CODE_SIGN_STYLE=Manual \

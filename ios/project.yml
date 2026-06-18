@@ -76,6 +76,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.joelmortees.nutricoach
         TARGETED_DEVICE_FAMILY: "1"
         ENABLE_PREVIEWS: NO
+        ENABLE_DEBUG_DYLIB: NO
+        SWIFT_ENABLE_PREVIEWS: NO
         DEVELOPMENT_ASSET_PATHS: ""
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
