@@ -7,6 +7,9 @@
 
 param(
     [string]$P8Path = "",
+    [string]$TeamId = "",
+    [string]$KeyId = "",
+    [string]$IssuerId = "",
     [switch]$Help = $false
 )
 
@@ -16,7 +19,7 @@ $EnvFile = "$ProjectRoot\.env"
 
 if ($Help) {
     Write-Host @"
-Uso: .\configure-apple.ps1 [-P8Path <ruta-al-p8>]
+Uso: .\configure-apple.ps1 [-P8Path <ruta>] [-TeamId <id>] [-KeyId <id>] [-IssuerId <uuid>]
 
 Si no pasas -P8Path, el script te preguntará interactivamente.
 
@@ -56,17 +59,18 @@ if (-not (Test-Path $P8Path)) {
     exit 1
 }
 
-# Preguntar los 3 IDs
-Write-Host ""
-Write-Host "Necesito 3 datos que están en tu cuenta de Apple:" -ForegroundColor Cyan
-Write-Host "  - Team ID: aparece arriba a la derecha en developer.apple.com (10 caracteres)" -ForegroundColor Gray
-Write-Host "  - Key ID: aparece junto al nombre de la API Key que generaste" -ForegroundColor Gray
-Write-Host "  - Issuer ID: aparece en App Store Connect > Users > Keys (es un UUID)" -ForegroundColor Gray
-Write-Host ""
-
-$teamId = Read-Host "Team ID (ej: 9HXVF6WC32)"
-$keyId = Read-Host "Key ID (10 chars alfanuméricos)"
-$issuerId = Read-Host "Issuer ID (UUID formato xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"
+# Preguntar los 3 IDs si no se pasaron por parámetro
+if ([string]::IsNullOrWhiteSpace($TeamId) -or [string]::IsNullOrWhiteSpace($KeyId) -or [string]::IsNullOrWhiteSpace($IssuerId)) {
+    Write-Host ""
+    Write-Host "Necesito 3 datos que están en tu cuenta de Apple:" -ForegroundColor Cyan
+    Write-Host "  - Team ID: aparece arriba a la derecha en developer.apple.com (10 caracteres)" -ForegroundColor Gray
+    Write-Host "  - Key ID: aparece junto al nombre de la API Key que generaste" -ForegroundColor Gray
+    Write-Host "  - Issuer ID: aparece en App Store Connect > Users > Keys (es un UUID)" -ForegroundColor Gray
+    Write-Host ""
+    if ([string]::IsNullOrWhiteSpace($TeamId)) { $TeamId = Read-Host "Team ID (ej: 9HXVF6WC32)" }
+    if ([string]::IsNullOrWhiteSpace($KeyId)) { $KeyId = Read-Host "Key ID (10 chars alfanuméricos)" }
+    if ([string]::IsNullOrWhiteSpace($IssuerId)) { $IssuerId = Read-Host "Issuer ID (UUID formato xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)" }
+}
 
 # Validaciones básicas
 if ($teamId -notmatch "^[A-Z0-9]{10}$") {
@@ -113,9 +117,9 @@ Write-Host "Actualizando .env..." -NoNewline
 $envContent = Get-Content $EnvFile -Raw
 
 # Reemplazar los placeholders
-$envContent = $envContent -replace "APPLE_TEAM_ID=<.*>", "APPLE_TEAM_ID=$teamId"
-$envContent = $envContent -replace "APPLE_KEY_ID=<.*>", "APPLE_KEY_ID=$keyId"
-$envContent = $envContent -replace "APPLE_ISSUER_ID=<.*>", "APPLE_ISSUER_ID=$issuerId"
+$envContent = $envContent -replace "APPLE_TEAM_ID=<.*>", "APPLE_TEAM_ID=$TeamId"
+$envContent = $envContent -replace "APPLE_KEY_ID=<.*>", "APPLE_KEY_ID=$KeyId"
+$envContent = $envContent -replace "APPLE_ISSUER_ID=<.*>", "APPLE_ISSUER_ID=$IssuerId"
 $envContent = $envContent -replace "APPLE_API_KEY_BASE64=<.*>", "APPLE_API_KEY_BASE64=$base64"
 
 Set-Content -Path $EnvFile -Value $envContent -NoNewline -Encoding UTF8
@@ -131,9 +135,9 @@ Write-Host ""
 Write-Host "=== Listo ===" -ForegroundColor Green
 Write-Host ""
 Write-Host "Configurado en .env (no se imprime por seguridad):" -ForegroundColor Cyan
-Write-Host "  APPLE_TEAM_ID        = $teamId" -ForegroundColor Gray
-Write-Host "  APPLE_KEY_ID         = $keyId" -ForegroundColor Gray
-Write-Host "  APPLE_ISSUER_ID      = $issuerId" -ForegroundColor Gray
+Write-Host "  APPLE_TEAM_ID        = $TeamId" -ForegroundColor Gray
+Write-Host "  APPLE_KEY_ID         = $KeyId" -ForegroundColor Gray
+Write-Host "  APPLE_ISSUER_ID      = $IssuerId" -ForegroundColor Gray
 Write-Host "  APPLE_API_KEY_BASE64 = [$(($base64.Length)) chars]" -ForegroundColor Gray
 Write-Host ""
 Write-Host "Borra el .p8 de tu carpeta de Descargas después de esto (no lo necesitamos)." -ForegroundColor Yellow
