@@ -1,0 +1,134 @@
+# ============================================================
+# codemagic.yaml - NutriCoach AI
+# Build iOS sin cola de macOS (runners dedicados Codemagic)
+# Plan free: 500 min/mes
+# Docs: https://docs.codemagic.io/yaml-basic-configuration/
+# ============================================================
+
+workflows:
+  ios-debug:
+    name: iOS Debug
+    max_build_duration: 60
+    environment:
+      flutter: none
+      xcode: latest
+      cocoapods: default
+    triggering:
+      events:
+        - push
+        - pull_request
+      branch_patterns:
+        - pattern: 'main'
+          include: true
+        - pattern: 'feat/*'
+          include: true
+    scripts:
+      - name: Set up Ruby + CocoaPods
+        script: |
+          gem install --no-document cocoapods
+      - name: Install xcodegen
+        script: brew install xcodegen
+      - name: Generate Xcode project
+        script: |
+          cd ios
+          xcodegen generate
+      - name: Resolve SPM dependencies
+        script: |
+          xcodebuild -resolvePackageDependencies \
+            -project ios/NutriCoach.xcodeproj \
+            -scheme NutriCoach
+      - name: Build (Debug, no signing)
+        script: |
+          xcodebuild \
+            -project ios/NutriCoach.xcodeproj \
+            -scheme NutriCoach \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build | tee build/xcodebuild.log
+      - name: Create IPA (no signing)
+        script: |
+          APP_PATH=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
+          echo "App path: $APP_PATH"
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/
+          cd build && zip -qr NutriCoach-Debug-unsigned.ipa Payload
+          ls -lh build/NutriCoach-Debug-unsigned.ipa
+    artifacts:
+      - build/NutriCoach-Debug-unsigned.ipa
+      - build/xcodebuild.log
+    publishing:
+      email:
+        recipients:
+          - joelmortees@gmail.com
+        notify:
+          success: true
+          failure: true
+
+  ios-signed:
+    name: iOS Signed (for sideloadly)
+    max_build_duration: 60
+    environment:
+      flutter: none
+      xcode: latest
+      cocoapods: default
+      groups:
+        - app_store_connect   # grupo con Apple creds (configurar en UI)
+        - bundle_identifiers  # grupo con bundle id
+    triggering:
+      events:
+        - push
+        - workflow_dispatch
+      branch_patterns:
+        - pattern: 'main'
+          include: true
+    scripts:
+      - name: Set up Ruby + CocoaPods
+        script: |
+          gem install --no-document cocoapods
+      - name: Install xcodegen
+        script: brew install xcodegen
+      - name: Generate Xcode project
+        script: |
+          cd ios
+          xcodegen generate
+      - name: Resolve SPM dependencies
+        script: |
+          xcodebuild -resolvePackageDependencies \
+            -project ios/NutriCoach.xcodeproj \
+            -scheme NutriCoach
+      - name: Build (Release, signed)
+        script: |
+          xcodebuild \
+            -project ios/NutriCoach.xcodeproj \
+            -scheme NutriCoach \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            -allowProvisioningUpdates \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Development" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            PRODUCT_BUNDLE_IDENTIFIER="$APPLE_BUNDLE_ID" \
+            build | tee build/xcodebuild-signed.log
+      - name: Create IPA
+        script: |
+          APP_PATH=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
+          echo "App path: $APP_PATH"
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/
+          cd build && zip -qr NutriCoach-Release.ipa Payload
+          ls -lh build/NutriCoach-Release.ipa
+    artifacts:
+      - build/NutriCoach-Release.ipa
+      - build/xcodebuild-signed.log
+    publishing:
+      email:
+        recipients:
+          - joelmortees@gmail.com
+        notify:
+          success: true
+          failure: true
