@@ -94,16 +94,29 @@ workflows:
             echo "ERROR: no existe $PLIST"
             exit 1
           fi
+          echo "=== Info.plist ANTES de inyectar (primeras 30 lineas) ==="
+          /usr/libexec/PlistBuddy -c "Print" "$PLIST" 2>&1 | head -30
+          echo ""
+          echo "=== Keys SUPABASE_ existentes antes? ==="
+          /usr/libexec/PlistBuddy -c "Print" "$PLIST" 2>&1 | grep -E "SUPABASE_" || echo "(ninguna)"
+          echo ""
           echo "=== Inyectando env vars en $PLIST ==="
           if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
             echo "ERROR: SUPABASE_URL y/o SUPABASE_ANON_KEY no estan definidas en Codemagic env vars"
             echo "Configuralas en: Codemagic UI > Settings > Environment variables"
             exit 1
           fi
-          /usr/libexec/PlistBuddy -c "Set :SUPABASE_URL $SUPABASE_URL" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Set :SUPABASE_ANON_KEY $SUPABASE_ANON_KEY" "$PLIST"
-          echo "=== Info.plist actualizado ==="
-          /usr/libexec/PlistBuddy -c "Print" "$PLIST" | grep -E "SUPABASE_" || echo "(sin valores SUPABASE_)"
+          # 'Add' crea la key si no existe, 'Set' la actualiza si existe.
+          # Usamos ambos para cubrir ambos casos (el .app/Info.plist puede
+          # tener o no las keys, dependiendo de si xcodebuild regenera el file).
+          /usr/libexec/PlistBuddy -c "Add :SUPABASE_URL string $SUPABASE_URL" "$PLIST" 2>&1 || \
+            /usr/libexec/PlistBuddy -c "Set :SUPABASE_URL $SUPABASE_URL" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :SUPABASE_ANON_KEY string $SUPABASE_ANON_KEY" "$PLIST" 2>&1 || \
+            /usr/libexec/PlistBuddy -c "Set :SUPABASE_ANON_KEY $SUPABASE_ANON_KEY" "$PLIST"
+          echo ""
+          echo "=== Info.plist DESPUES de inyectar (solo SUPABASE_) ==="
+          /usr/libexec/PlistBuddy -c "Print :SUPABASE_URL" "$PLIST" 2>&1 | head -3
+          /usr/libexec/PlistBuddy -c "Print :SUPABASE_ANON_KEY" "$PLIST" 2>&1 | head -3
       - name: Create IPA (no signing)
         script: |
           APP_PATH=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
