@@ -28,12 +28,6 @@ struct ChatView: View {
                         Image(systemName: "plus.bubble.fill")
                     }
                 }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Listo") {
-                        inputFocused = false
-                    }
-                }
             }
             .task {
                 await viewModel.loadOrCreateConversation()
@@ -57,10 +51,6 @@ struct ChatView: View {
                     ForEach(viewModel.messages) { msg in
                         MessageRow(message: msg)
                             .id(msg.id)
-                    }
-                    if viewModel.isAgentThinking {
-                        ThinkingIndicator()
-                            .id("thinking")
                     }
                 }
                 .padding(.horizontal, 16)
@@ -144,22 +134,7 @@ struct ThinkingIndicator: View {
     let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        HStack {
-            HStack(spacing: 6) {
-                Image(systemName: "brain.head.profile")
-                    .foregroundStyle(.purple)
-                Text("Pensando" + String(repeating: ".", count: dots))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.purple.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
-            Spacer()
-        }
-        .onReceive(timer) { _ in
-            dots = (dots + 1) % 4
-        }
+        EmptyView()
     }
 }
 

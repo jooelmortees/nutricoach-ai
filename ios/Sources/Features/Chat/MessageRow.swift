@@ -32,14 +32,36 @@ private struct TextBubble: View {
     let role: ChatMessage.Role
     let isStreaming: Bool
 
+    @State private var dots: Int = 1
+
+    private let timer = Timer.publish(every: 0.45, on: .main, in: .common).autoconnect()
+
     var body: some View {
-        Text(text.isEmpty && isStreaming ? "..." : text)
-            .textSelection(.enabled)
-            .font(.body)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(bg, in: RoundedRectangle(cornerRadius: 16))
-            .foregroundStyle(fg)
+        Group {
+            if text.isEmpty && isStreaming {
+                // Indicador animado mientras el agente piensa: 1 → 2 → 3 → 1 puntos
+                HStack(spacing: 3) {
+                    ForEach(0..<3) { i in
+                        Circle()
+                            .fill(.secondary)
+                            .frame(width: 7, height: 7)
+                            .opacity(i < dots ? 1.0 : 0.3)
+                    }
+                }
+                .frame(width: 36, height: 22, alignment: .center)
+                .onReceive(timer) { _ in
+                    dots = (dots % 3) + 1
+                }
+            } else {
+                Text(text)
+                    .textSelection(.enabled)
+            }
+        }
+        .font(.body)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(bg, in: RoundedRectangle(cornerRadius: 16))
+        .foregroundStyle(fg)
     }
 
     private var bg: Color {
