@@ -13,17 +13,16 @@ final class ChatViewModel: ObservableObject {
     @Published var isAgentThinking: Bool = false
     @Published var currentConversationId: String?
     @Published var errorMessage: String?
+    @Published var pendingImageDescription: String?
 
     private let agent = AgentService.shared
 
     func loadOrCreateConversation() async {
         do {
-            // Buscar conversación más reciente del usuario; si no hay, crear
             if currentConversationId == nil {
                 let id = try await agent.loadOrCreateLatestConversation()
                 currentConversationId = id
             }
-            // Cargar historial de mensajes de esa conversación
             if let convId = currentConversationId {
                 let history = try await agent.loadHistory(conversationId: convId)
                 messages = history.map { h in
@@ -46,27 +45,36 @@ final class ChatViewModel: ObservableObject {
             let id = try await agent.createConversation()
             currentConversationId = id
             messages = []
+            errorMessage = nil
         } catch {
             errorMessage = "No se pudo crear conversación: \(error.localizedDescription)"
         }
     }
 
-    func send(_ text: String) async {
-        guard !text.isEmpty, let convId = currentConversationId else { return }
+    /// Envía un mensaje al agente. Soporta texto + adjuntos opcionales.
+    /// Si hay una imagen pendiente, la sube a Storage y la incluye como attachment.
+    func send(_ text: String, attachments: [AgentAttachment] = []) async {
+        guard !text.isEmpty || !attachments.isEmpty else { return }
+        guard let convId = currentConversationId else {
+            errorMessage = "No hay conversación activa. Espera a que se cargue o crea una nueva."
+            return
+        }
 
-        // 1. Añadir mensaje del usuario
+        // 1. Añadir mensaje del usuario a la UI
         let userMsg = ChatMessage(role: .user, content: text)
         messages.append(userMsg)
         isAgentThinking = true
+        errorMessage = nil
 
-        // 2. Crear placeholder del asistente
+        // 2. Crear placeholder del asistente (se va rellenando con SSE)
         let assistantMsg = ChatMessage(role: .assistant, content: "", isStreaming: true)
         messages.append(assistantMsg)
 
         // 3. Enviar al agente
         await agent.sendMessage(
             conversationId: convId,
-            message: text
+            message: text,
+            attachments: attachments
         ) { [weak self] event in
             Task { @MainActor in
                 guard let self else { return }
@@ -95,25 +103,59 @@ final class ChatViewModel: ObservableObject {
         case .error(let msg):
             errorMessage = msg
             isAgentThinking = false
+            // Marcar el último mensaje como no-streaming para que no quede en streaming perpetuo
+            if let idx = messages.indices.last, messages[idx].role == .assistant && messages[idx].isStreaming {
+                messages[idx].isStreaming = false
+                if messages[idx].content.isEmpty {
+                    messages[idx].content = "⚠️ Error: \(msg)"
+                }
+            }
         }
     }
 
+    /// Maneja una imagen seleccionada por el usuario: la sube a Storage y
+    /// prepara el attachment para el próximo envío.
     func handlePickedImage(_ item: PhotosPickerItem?) async {
         guard let item else { return }
         do {
-            // En fase 1: subimos a Storage y mandamos URL al agente
-            // Aquí simplificado: solo info de que hay imagen
-            let data = try await item.loadTransferable(type: Data.self)
-            guard let data else { return }
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                errorMessage = "No se pudo cargar la imagen"
+                return
+            }
+            // Comprimir a JPEG max 2MB para no saturar Storage
+            let compressed = compressImage(data: data, maxBytes: 2 * 1024 * 1024)
+            pendingImageDescription = "Subiendo imagen... (\(compressed.count / 1024) KB)"
 
-            // TODO fase 2: subir a Supabase Storage y obtener URL pública
-            // Por ahora, mensaje placeholder
-            await send("📷 [Imagen adjunta - \(data.count) bytes] (subida pendiente)")
+            let url = try await StorageService.shared.uploadMealImage(data: compressed)
+            pendingImageDescription = "📷 Imagen lista"
+            AppLogger.info("Imagen subida: \(url)")
+
+            // Enviar mensaje con la URL como attachment
+            let attachment = AgentAttachment(type: "image", url: url)
+            await send("He subido una foto de una comida. ¿Puedes analizarla?", attachments: [attachment])
+            pendingImageDescription = nil
         } catch {
-            errorMessage = "Error procesando imagen: \(error.localizedDescription)"
+            pendingImageDescription = nil
+            errorMessage = "Error subiendo imagen: \(error.localizedDescription)"
         }
     }
+
+    /// Comprime una imagen JPEG hasta que esté por debajo de maxBytes.
+    private func compressImage(data: Data, maxBytes: Int) -> Data {
+        guard let image = UIImage(data: data) else { return data }
+        var quality: CGFloat = 0.8
+        var result = data
+        while result.count > maxBytes && quality > 0.1 {
+            if let jpeg = image.jpegData(compressionQuality: quality) {
+                result = jpeg
+            }
+            quality -= 0.1
+        }
+        return result
+    }
 }
+
+import UIKit
 
 struct ChatMessage: Identifiable {
     let id: UUID

@@ -63,12 +63,20 @@ final class AuthManager: ObservableObject {
     /// y lo envía a Supabase via `signInWithIdToken`. Si es la primera vez
     /// y tenemos el nombre completo, lo guardamos en user_metadata.
     func signInWithApple(idToken: String, fullName: PersonNameComponents?) async throws {
-        let session = try await supabase.auth.signInWithIdToken(
-            credentials: OpenIDConnectCredentials(
-                provider: .apple,
-                idToken: idToken
+        AppLogger.info("Apple Sign In: idToken length=\(idToken.count)")
+        let session: Session
+        do {
+            session = try await supabase.auth.signInWithIdToken(
+                credentials: OpenIDConnectCredentials(
+                    provider: .apple,
+                    idToken: idToken
+                )
             )
-        )
+        } catch {
+            AppLogger.error("Apple Sign In failed: \(error.localizedDescription)")
+            throw error
+        }
+        AppLogger.info("Apple Sign In OK: user=\(session.user.id)")
         // Solo la PRIMERA vez Apple envía el nombre completo. Las siguientes
         // veces es nil. Si llega, lo guardamos en user_metadata.
         if let components = fullName {
