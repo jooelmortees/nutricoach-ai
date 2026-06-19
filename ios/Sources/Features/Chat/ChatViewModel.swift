@@ -100,6 +100,13 @@ final class ChatViewModel: ObservableObject {
                 messages[idx].isStreaming = false
             }
             isAgentThinking = false
+        case .mealSaved(let kcal, let protein, let carbs, let fat, let description):
+            // Mostrar confirmación visual de comida registrada
+            let summary = formatMealSummary(kcal: kcal, protein: protein, carbs: carbs, fat: fat)
+            messages.append(ChatMessage(
+                role: .assistant,
+                content: "🍽️ \(description)\n\(summary)\n\nRegistrada en tu pestaña Macros."
+            ))
         case .error(let msg):
             errorMessage = msg
             isAgentThinking = false
@@ -113,8 +120,9 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    /// Maneja una imagen seleccionada por el usuario: la sube a Storage y
-    /// prepara el attachment para el próximo envío.
+    /// Maneja una imagen seleccionada por el usuario: la sube a Storage, la envía
+    /// al agente para análisis, y borra la imagen una vez analizada.
+    /// El agente devuelve las macros estimadas que se guardan en `meals`.
     func handlePickedImage(_ item: PhotosPickerItem?) async {
         guard let item else { return }
         do {
@@ -122,22 +130,35 @@ final class ChatViewModel: ObservableObject {
                 errorMessage = "No se pudo cargar la imagen"
                 return
             }
-            // Comprimir a JPEG max 2MB para no saturar Storage
+            // Comprimir a JPEG max 2MB
             let compressed = compressImage(data: data, maxBytes: 2 * 1024 * 1024)
-            pendingImageDescription = "Subiendo imagen... (\(compressed.count / 1024) KB)"
+            pendingImageDescription = "Subiendo imagen..."
 
+            // 1. Subir a Storage
             let url = try await StorageService.shared.uploadMealImage(data: compressed)
-            pendingImageDescription = "📷 Imagen lista"
+            pendingImageDescription = "Analizando comida..."
             AppLogger.info("Imagen subida: \(url)")
 
-            // Enviar mensaje con la URL como attachment
+            // 2. Enviar al agente (que la descarga, analiza con vision, y guarda macros)
             let attachment = AgentAttachment(type: "image", url: url)
-            await send("He subido una foto de una comida. ¿Puedes analizarla?", attachments: [attachment])
+            await send("He subido una foto de comida. Analízala y dime las macros estimadas.", attachments: [attachment])
             pendingImageDescription = nil
+
+            // 3. Borrar imagen de Storage (no la necesitamos, solo el análisis textual)
+            await StorageService.shared.deleteMealImage(at: url)
         } catch {
             pendingImageDescription = nil
-            errorMessage = "Error subiendo imagen: \(error.localizedDescription)"
+            errorMessage = "Error con la imagen: \(error.localizedDescription)"
         }
+    }
+
+    private func formatMealSummary(kcal: Double?, protein: Double?, carbs: Double?, fat: Double?) -> String {
+        var parts: [String] = []
+        if let kcal = kcal { parts.append("\(Int(kcal)) kcal") }
+        if let p = protein { parts.append("P \(Int(p))g") }
+        if let c = carbs { parts.append("C \(Int(c))g") }
+        if let f = fat { parts.append("G \(Int(f))g") }
+        return parts.joined(separator: " · ")
     }
 
     /// Comprime una imagen JPEG hasta que esté por debajo de maxBytes.

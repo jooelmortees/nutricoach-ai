@@ -12,6 +12,7 @@ enum AgentEvent {
     case blockStart
     case blockStop
     case done
+    case mealSaved(kcal: Double?, protein: Double?, carbs: Double?, fat: Double?, description: String)
     case error(String)
 }
 
@@ -96,6 +97,14 @@ final class AgentService: ObservableObject {
         case "block_start": return .blockStart
         case "block_stop": return .blockStop
         case "done": return .done
+        case "meal_saved":
+            return .mealSaved(
+                kcal: (obj["kcal"] as? NSNumber)?.doubleValue,
+                protein: (obj["protein_g"] as? NSNumber)?.doubleValue,
+                carbs: (obj["carbs_g"] as? NSNumber)?.doubleValue,
+                fat: (obj["fat_g"] as? NSNumber)?.doubleValue,
+                description: obj["description"] as? String ?? "Comida registrada"
+            )
         case "error":
             if let msg = obj["message"] as? String { return .error(msg) }
             if let msg = obj["error"] as? String { return .error(msg) }

@@ -9,7 +9,7 @@ struct MainTabView: View {
     @State private var selectedTab: Tab = .chat
 
     enum Tab: String, Hashable {
-        case chat, camera, dashboard, plans, settings
+        case chat, macros, camera, dashboard, plans, settings
     }
 
     var body: some View {
@@ -17,6 +17,10 @@ struct MainTabView: View {
             ChatView()
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }
                 .tag(Tab.chat)
+
+            MacrosView()
+                .tabItem { Label("Macros", systemImage: "chart.pie.fill") }
+                .tag(Tab.macros)
 
             CameraView()
                 .tabItem { Label("Cámara", systemImage: "camera.fill") }
