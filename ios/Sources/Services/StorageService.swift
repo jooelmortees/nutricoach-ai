@@ -56,7 +56,7 @@ final class StorageService {
             let signed = try await supabase.storage
                 .from("meal-photos")
                 .createSignedURL(path: path, expiresIn: 3600)
-            return signed.signedURL.absoluteString
+            return signed.absoluteString
         } catch {
             throw StorageError.signedUrlFailed(error.localizedDescription)
         }
