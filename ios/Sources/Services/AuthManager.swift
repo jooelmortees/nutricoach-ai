@@ -1,6 +1,6 @@
 // ============================================================
 // AuthManager - gestiona sesión de Supabase Auth
-// Soporta email/password y Apple Sign In (futuro)
+// Soporta email/password, sign-up y Sign In with Apple
 // ============================================================
 
 import Foundation
@@ -18,6 +18,7 @@ enum AuthState {
 final class AuthManager: ObservableObject {
     @Published var state: AuthState = .loading
     @Published var profile: Profile?
+    @Published var authError: String?
 
     private let supabase = SupabaseService.shared.client
 
@@ -29,8 +30,9 @@ final class AuthManager: ObservableObject {
             state = .signedIn(user: user)
             AppLogger.info("Sesión restaurada: \(user.id)")
         } catch {
+            // Sin sesión activa: esto es normal en primer arranque
             state = .signedOut
-            AppLogger.info("Sin sesión activa")
+            AppLogger.info("Sin sesión activa al arrancar")
         }
     }
 
@@ -55,6 +57,31 @@ final class AuthManager: ObservableObject {
         )
         await loadProfile(userId: response.user.id)
         state = .signedIn(user: response.user)
+    }
+
+    /// Sign In with Apple: extrae el identityToken de la credencial de Apple
+    /// y lo envía a Supabase via `signInWithIdToken`. Si es la primera vez
+    /// y tenemos el nombre completo, lo guardamos en user_metadata.
+    func signInWithApple(idToken: String, fullName: PersonNameComponents?) async throws {
+        let session = try await supabase.auth.signInWithIdToken(
+            credentials: OpenIDConnectCredentials(
+                provider: .apple,
+                idToken: idToken
+            )
+        )
+        // Solo la PRIMERA vez Apple envía el nombre completo. Las siguientes
+        // veces es nil. Si llega, lo guardamos en user_metadata.
+        if let components = fullName {
+            let formatter = PersonNameComponentsFormatter()
+            let fullNameString = formatter.string(from: components).trimmingCharacters(in: .whitespaces)
+            if !fullNameString.isEmpty {
+                _ = try? await supabase.auth.update(
+                    user: UserAttributes(data: ["full_name": .string(fullNameString)])
+                )
+            }
+        }
+        await loadProfile(userId: session.user.id)
+        state = .signedIn(user: session.user)
     }
 
     func signOut() async {

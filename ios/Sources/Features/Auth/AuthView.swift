@@ -1,8 +1,9 @@
 // ============================================================
-// AuthView - Login / Sign up
+// AuthView - Login / Sign up con email o Apple ID
 // ============================================================
 
 import SwiftUI
+import AuthenticationServices
 
 struct AuthView: View {
     @EnvironmentObject var auth: AuthManager
@@ -20,6 +21,7 @@ struct AuthView: View {
                     header
                     form
                     actions
+                    appleSignInButton
                     if let err = errorMessage {
                         Text(err)
                             .font(.caption)
@@ -102,6 +104,32 @@ struct AuthView: View {
         }
     }
 
+    private var appleSignInButton: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Rectangle()
+                    .frame(height: 1)
+                    .foregroundStyle(.secondary.opacity(0.3))
+                Text("o")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Rectangle()
+                    .frame(height: 1)
+                    .foregroundStyle(.secondary.opacity(0.3))
+            }
+            .padding(.vertical, 4)
+
+            SignInWithAppleButton(.signIn) { request in
+                request.requestedScopes = [.email, .fullName]
+            } onCompletion: { result in
+                Task { await handleAppleSignIn(result) }
+            }
+            .signInWithAppleButtonStyle(.black)
+            .frame(height: 50)
+            .disabled(isLoading)
+        }
+    }
+
     private func submit() async {
         errorMessage = nil
         isLoading = true
@@ -114,6 +142,34 @@ struct AuthView: View {
             }
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func handleAppleSignIn(_ result: Result<ASAuthorization, Error>) async {
+        errorMessage = nil
+        isLoading = true
+        defer { isLoading = false }
+        switch result {
+        case .success(let authorization):
+            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                errorMessage = "Credencial de Apple no válida"
+                return
+            }
+            guard let identityTokenData = credential.identityToken,
+                  let identityToken = String(data: identityTokenData, encoding: .utf8) else {
+                errorMessage = "No se pudo obtener el token de identidad de Apple"
+                return
+            }
+            do {
+                try await auth.signInWithApple(idToken: identityToken, fullName: credential.fullName)
+            } catch {
+                errorMessage = "Error con Apple Sign In: \(error.localizedDescription)"
+            }
+        case .failure(let error):
+            // Si el usuario cancela, no mostramos error
+            if (error as NSError).code != ASAuthorizationError.canceled.rawValue {
+                errorMessage = "Error con Apple Sign In: \(error.localizedDescription)"
+            }
         }
     }
 }
