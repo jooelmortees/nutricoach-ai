@@ -72,7 +72,7 @@ struct MacrosView: View {
 
     private var targetComparison: some View {
         Group {
-            if let target = viewModel.profile?.kcal_target, target > 0 {
+            if let target = viewModel.profile?.dailyKcalTarget, target > 0 {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Objetivo diario")
