@@ -17,8 +17,27 @@ final class ChatViewModel: ObservableObject {
     private let agent = AgentService.shared
 
     func loadOrCreateConversation() async {
-        if currentConversationId == nil {
-            await newConversation()
+        do {
+            // Buscar conversación más reciente del usuario; si no hay, crear
+            if currentConversationId == nil {
+                let id = try await agent.loadOrCreateLatestConversation()
+                currentConversationId = id
+            }
+            // Cargar historial de mensajes de esa conversación
+            if let convId = currentConversationId {
+                let history = try await agent.loadHistory(conversationId: convId)
+                messages = history.map { h in
+                    ChatMessage(
+                        id: UUID(uuidString: h.id) ?? UUID(),
+                        role: h.role,
+                        content: h.content,
+                        thinking: h.thinking,
+                        isStreaming: false
+                    )
+                }
+            }
+        } catch {
+            errorMessage = "No se pudo cargar historial: \(error.localizedDescription)"
         }
     }
 
@@ -97,11 +116,19 @@ final class ChatViewModel: ObservableObject {
 }
 
 struct ChatMessage: Identifiable {
-    let id = UUID()
+    let id: UUID
     let role: Role
     var content: String
     var thinking: String?
     var isStreaming: Bool = false
+
+    init(id: UUID = UUID(), role: Role, content: String, thinking: String? = nil, isStreaming: Bool = false) {
+        self.id = id
+        self.role = role
+        self.content = content
+        self.thinking = thinking
+        self.isStreaming = isStreaming
+    }
 
     enum Role {
         case user, assistant

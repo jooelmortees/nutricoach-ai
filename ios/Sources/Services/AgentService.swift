@@ -1,6 +1,6 @@
 // ============================================================
 // AgentService - cliente del agente (Edge Function chat-proxy)
-// Maneja streaming con SSE
+// Maneja streaming con SSE (Server-Sent Events)
 // ============================================================
 
 import Foundation
@@ -28,7 +28,8 @@ final class AgentService: ObservableObject {
         self.session = URLSession(configuration: config)
     }
 
-    /// Envía un mensaje al agente y emite eventos vía `onEvent`
+    /// Envía un mensaje al agente y emite eventos vía `onEvent`.
+    /// Parsea SSE en formato estándar: `event: <type>\ndata: <json>\n\n`.
     func sendMessage(
         conversationId: String,
         message: String,
@@ -52,15 +53,30 @@ final class AgentService: ObservableObject {
 
             let (bytes, response) = try await session.bytes(for: req)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                onEvent(.error("HTTP error: \((response as? HTTPURLResponse)?.statusCode ?? -1)"))
+                let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+                onEvent(.error("HTTP error: \(status)"))
                 return
             }
 
+            // Parser SSE: lee líneas, agrupa por bloques separados por línea
+            // vacía. Cada bloque es `event: <type>\ndata: <json>`.
+            var currentEvent: String?
             for try await line in bytes.lines {
-                if line.isEmpty || !line.hasPrefix("data:") { continue }
-                let data = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-                if let event = parseSSE(data: data) {
-                    onEvent(event)
+                if line.isEmpty {
+                    // Fin de bloque (pero el bloque completo viene en una
+                    // sola iteración porque ya teníamos event/data)
+                    currentEvent = nil
+                    continue
+                }
+                if line.hasPrefix("event:") {
+                    currentEvent = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                    continue
+                }
+                if line.hasPrefix("data:") {
+                    let data = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                    if let event = parseSSE(type: currentEvent, data: data) {
+                        onEvent(event)
+                    }
                 }
             }
         } catch {
@@ -68,24 +84,54 @@ final class AgentService: ObservableObject {
         }
     }
 
-    private func parseSSE(data: String) -> AgentEvent? {
-        // El formato es: "event: <type>\ndata: <json>\n\n"
-        // Aquí recibimos solo la parte de data (una línea). Para simplificar
-        // el parser en el cliente, el backend podría enviar tipo+data en una sola línea.
-        // Por ahora parseamos el JSON completo:
+    private func parseSSE(type: String?, data: String) -> AgentEvent? {
         guard let jsonData = data.data(using: .utf8) else { return nil }
         guard let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else { return nil }
 
-        if let text = obj["text"] as? String, let type = obj["type"] as? String {
-            switch type {
-            case "thinking": return .thinkingDelta(text)
-            case "text": return .textDelta(text)
-            default: break
-            }
+        switch type {
+        case "thinking":
+            if let text = obj["text"] as? String { return .thinkingDelta(text) }
+        case "text":
+            if let text = obj["text"] as? String { return .textDelta(text) }
+        case "block_start": return .blockStart
+        case "block_stop": return .blockStop
+        case "done": return .done
+        case "error":
+            if let msg = obj["message"] as? String { return .error(msg) }
+            if let msg = obj["error"] as? String { return .error(msg) }
+        default:
+            break
         }
-        if let done = obj["done"] as? Bool, done { return .done }
-        if let err = obj["message"] as? String { return .error(err) }
         return nil
+    }
+
+    /// Carga el historial de mensajes de una conversación.
+    func loadHistory(conversationId: String) async throws -> [HistoryMessage] {
+        struct Row: Decodable {
+            let id: UUID
+            let role: String
+            let content: String
+            let thinking: String?
+            let created_at: String
+        }
+        let supabase = SupabaseService.shared.client
+        let rows: [Row] = try await supabase
+            .from("messages")
+            .select("id,role,content,thinking,created_at")
+            .eq("conversation_id", value: conversationId)
+            .order("created_at", ascending: true)
+            .execute()
+            .value
+
+        return rows.map { row in
+            HistoryMessage(
+                id: row.id.uuidString,
+                role: row.role == "user" ? .user : .assistant,
+                content: row.content,
+                thinking: row.thinking,
+                createdAt: row.created_at
+            )
+        }
     }
 
     /// Crea una conversación nueva
@@ -105,6 +151,27 @@ final class AgentService: ObservableObject {
             .value
         return response.id.uuidString
     }
+
+    /// Carga (o crea si no hay) la conversación más reciente del usuario.
+    func loadOrCreateLatestConversation() async throws -> String {
+        struct ConvRow: Decodable {
+            let id: UUID
+        }
+        let supabase = SupabaseService.shared.client
+        let userId = try await supabase.auth.session.user.id
+        let existing: [ConvRow] = try await supabase
+            .from("conversations")
+            .select("id")
+            .eq("user_id", value: userId.uuidString)
+            .order("last_message_at", ascending: false)
+            .limit(1)
+            .execute()
+            .value
+        if let first = existing.first {
+            return first.id.uuidString
+        }
+        return try await createConversation()
+    }
 }
 
 struct AgentAttachment: Encodable {
@@ -116,4 +183,13 @@ struct AgentRequest: Encodable {
     let conversation_id: String
     let message: String
     let attachments: [AgentAttachment]
+}
+
+/// Mensaje cargado del historial (distinto de ChatMessage que es el del VM).
+struct HistoryMessage: Identifiable {
+    let id: String
+    let role: ChatMessage.Role
+    let content: String
+    let thinking: String?
+    let createdAt: String
 }

@@ -98,7 +98,6 @@ serve(async (req) => {
             system: systemPrompt,
             messages: apiMessages,
             tools,
-            thinking: { type: "adaptive" },
             stream: true,
           });
 
