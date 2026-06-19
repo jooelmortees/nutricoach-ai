@@ -5,7 +5,7 @@
 import Foundation
 import SwiftUI
 
-struct Meal: Identifiable, Decodable {
+struct LoggedMeal: Identifiable, Decodable {
     let id: UUID
     let description: String
     let meal_type: String?
@@ -27,7 +27,7 @@ struct Meal: Identifiable, Decodable {
 
 @MainActor
 final class MacrosViewModel: ObservableObject {
-    @Published var meals: [Meal] = []
+    @Published var meals: [LoggedMeal] = []
     @Published var profile: Profile?
     @Published var isLoading = false
     @Published var errorMessage: String?
@@ -89,7 +89,7 @@ final class MacrosViewModel: ObservableObject {
             .order("consumed_at", ascending: true)
             .execute()
             .value
-        meals = rows.map { Meal(
+        meals = rows.map { LoggedMeal(
             id: $0.id,
             description: $0.description,
             meal_type: $0.meal_type,

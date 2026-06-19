@@ -156,7 +156,7 @@ struct MacroCard: View {
 }
 
 struct MealRow: View {
-    let meal: Meal
+    let meal: LoggedMeal
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
