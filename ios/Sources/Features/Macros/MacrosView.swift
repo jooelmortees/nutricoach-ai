@@ -29,10 +29,10 @@ struct MacrosView: View {
                 }
             }
             .task {
-                await viewModel.load(userId: auth.profile?.id)
+                await viewModel.load(userId: auth.profile?.id.uuidString)
             }
             .refreshable {
-                await viewModel.refresh(userId: auth.profile?.id)
+                await viewModel.refresh(userId: auth.profile?.id.uuidString)
             }
         }
     }
