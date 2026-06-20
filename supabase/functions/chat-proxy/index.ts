@@ -1,16 +1,20 @@
 // ============================================================
 // chat-proxy - Edge Function de Supabase
-// Proxy seguro al agente MiniMax-M3. Ejecuta el loop de tools.
+// Proxy seguro al agente MiniMax-M3 vía API OpenAI-compatible.
+// M3 soporta multimodalidad (texto + imagen + video) con formato
+// image_url. Streaming con SSE hacia el cliente iOS.
 // ============================================================
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
-import Anthropic from "https://esm.sh/@anthropic-ai/sdk@0.27.3";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const MINIMAX_API_KEY = Deno.env.get("MINIMAX_API_KEY")!;
-const MINIMAX_BASE_URL = Deno.env.get("MINIMAX_BASE_URL") ?? "https://api.minimax.io/anthropic";
+// Endpoint OpenAI-compatible de MiniMax. La doc oficial dice
+// https://api.minimax.io/v1 (NO /anthropic) para vision.
+const MINIMAX_BASE_URL = Deno.env.get("MINIMAX_BASE_URL") ?? "https://api.minimax.io/v1";
 const MINIMAX_MODEL = Deno.env.get("MINIMAX_MODEL") ?? "MiniMax-M3";
 
 const corsHeaders = {
@@ -25,7 +29,7 @@ interface ChatRequest {
   attachments?: Array<{ type: "image" | "video"; url: string }>;
 }
 
-interface ImageAnalysis {
+interface MacrosAnalysis {
   description: string;
   meal_type?: string;
   kcal?: number;
@@ -49,7 +53,7 @@ serve(async (req) => {
     // 1. Identificar al usuario con el token JWT
     const supabaseUser = createClient(
       SUPABASE_URL,
-      Deno.env.get("SUPABASE_ANON_KEY")!,
+      SUPABASE_ANON_KEY,
       { global: { headers: { Authorization: authHeader } } }
     );
     const { data: { user }, error: userErr } = await supabaseUser.auth.getUser();
@@ -71,128 +75,143 @@ serve(async (req) => {
     const facts = await loadActiveFacts(supabaseAdmin, user.id);
     const recentMessages = await loadRecentMessages(supabaseAdmin, body.conversation_id, 20);
 
-    // 5. System prompt
+    // 5. System prompt (en OpenAI es un mensaje role: system)
     const systemPrompt = buildSystemPrompt(profile, facts);
 
-    // 6. Cliente MiniMax
-    const anthropic = new Anthropic({
-      apiKey: MINIMAX_API_KEY,
-      baseURL: MINIMAX_BASE_URL,
-    });
-
-    // 7. Guardar mensaje del usuario
+    // 6. Guardar mensaje del usuario en BD (incluye attachments para mostrar luego)
     await saveUserMessage(supabaseAdmin, body.conversation_id, body.message, body.attachments);
 
-    // 8. Construir contenido del mensaje del usuario (puede incluir imagen)
+    // 7. Construir content del mensaje del usuario (formato OpenAI multimodal).
+    // image_url acepta URL pública directamente (signed URL de Supabase Storage funciona)
+    // por lo que NO necesitamos descargar y convertir a base64.
+    const userContent: any[] = [];
     const imageAttachments = (body.attachments ?? []).filter((a) => a.type === "image");
-    const userContentBlocks: any[] = [];
-
-    // Si hay imagen, la descargamos y la pasamos a M3 como bloque image
-    let analysisHint = "";
-    if (imageAttachments.length > 0) {
-      const firstUrl = imageAttachments[0].url;
-      try {
-        const imgResp = await fetch(firstUrl);
-        if (imgResp.ok) {
-          const contentType = imgResp.headers.get("content-type") ?? "image/jpeg";
-          const buf = new Uint8Array(await imgResp.arrayBuffer());
-          const b64 = btoa(String.fromCharCode(...buf));
-          userContentBlocks.push({
-            type: "image",
-            source: { type: "base64", media_type: contentType, data: b64 },
-          });
-          analysisHint =
-            "\n\n[El usuario ha enviado una FOTO DE COMIDA. Analízala y devuelve EXCLUSIVAMENTE un JSON válido con esta estructura exacta, sin texto adicional: " +
-            '{"description": "<nombre del plato en español>", "meal_type": "breakfast|lunch|dinner|snack|other", ' +
-            '"kcal": <número>, "protein_g": <número>, "carbs_g": <número>, "fat_g": <número>, "confidence": <0-1>}. ' +
-            'Si no puedes identificar la comida, devuelve {"description": "Comida no identificada", "confidence": 0}.]';
-        }
-      } catch (e) {
-        console.error("Error descargando imagen:", e);
-      }
+    for (const att of imageAttachments) {
+      userContent.push({
+        type: "image_url",
+        image_url: { url: att.url },
+      });
     }
+    let displayMessage = body.message;
+    // Si hay imagen y el usuario no dio instruccion especifica, anadimos hint
+    if (imageAttachments.length > 0) {
+      // Hint sutil para que el modelo sepa que debe analizar y dar macros
+      // (sin sobreescribir la pregunta del usuario)
+      displayMessage = body.message +
+        (body.message.trim() ? "" : "\n\n") +
+        "\n\nAnaliza esta imagen de comida y devuelve las macros estimadas (kcal, proteínas, carbohidratos, grasas) en formato JSON al inicio de tu respuesta, seguido de un comentario en español.";
+    }
+    userContent.push({ type: "text", text: displayMessage });
 
-    userContentBlocks.push({ type: "text", text: body.message + analysisHint });
+    // 8. Mensajes para la API (formato OpenAI Chat Completions)
+    const apiMessages: any[] = [
+      { role: "system", content: systemPrompt },
+      ...recentMessages.map((m: any) => ({
+        role: m.role,
+        content: m.content,
+      })),
+      { role: "user", content: userContent },
+    ];
 
-    // 9. Mensajes para la API
-    const apiMessages = recentMessages.map((m: any) => ({
-      role: m.role,
-      content: m.content,
-    }));
-    apiMessages.push({
-      role: "user" as const,
-      content: userContentBlocks,
-    });
-
-    // 10. Tools
+    // 9. Tools (function calling - OpenAI format)
     const tools = getAgentTools();
 
-    // 11. Loop del agente con tool use
+    // 10. Llamada a MiniMax con streaming via fetch directo (controlamos
+    //     exactamente el formato y el parseo SSE).
+    const upstreamResp = await fetch(`${MINIMAX_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${MINIMAX_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: MINIMAX_MODEL,
+        messages: apiMessages,
+        tools,
+        stream: true,
+        max_completion_tokens: 16384,
+        thinking: { type: "adaptive" },  // M3 con thinking adaptativo
+      }),
+    });
+
+    if (!upstreamResp.ok) {
+      const errText = await upstreamResp.text();
+      return jsonError(upstreamResp.status, `MiniMax upstream error: ${errText}`);
+    }
+
+    // 11. Stream SSE al cliente iOS, parseando el formato OpenAI
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
+        const reader = upstreamResp.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let fullText = "";
+        let detectedMacros: MacrosAnalysis | null = null;
+
         try {
-          const messageStream = await anthropic.messages.create({
-            model: MINIMAX_MODEL,
-            max_tokens: 4096,
-            system: systemPrompt,
-            messages: apiMessages,
-            tools,
-            stream: true,
-          });
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
 
-          let fullText = "";
-          let fullThinking = "";
-          let detectedMacros: ImageAnalysis | null = null;
+            // Procesar lineas SSE de OpenAI (formato data: {...})
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
 
-          for await (const event of messageStream) {
-            if (event.type === "content_block_start") {
-              controller.enqueue(encoder.encode(sseEvent("block_start", event)));
-            } else if (event.type === "content_block_delta") {
-              if (event.delta.type === "thinking_delta") {
-                fullThinking += event.delta.thinking;
-                controller.enqueue(encoder.encode(sseEvent("thinking", { text: event.delta.thinking })));
-              } else if (event.delta.type === "text_delta") {
-                const delta = event.delta.text;
-                fullText += delta;
-                controller.enqueue(encoder.encode(sseEvent("text", { text: delta })));
-
-                // Si hay imagen adjunta, intentar parsear JSON de macros del texto
-                if (imageAttachments.length > 0 && !detectedMacros) {
-                  const jsonMatch = extractJson(fullText);
-                  if (jsonMatch) {
-                    try {
-                      const parsed = JSON.parse(jsonMatch);
-                      if (parsed.kcal !== undefined || parsed.protein_g !== undefined || parsed.description) {
-                        detectedMacros = parsed as ImageAnalysis;
-                      }
-                    } catch (_e) { /* no es JSON válido todavía */ }
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || !trimmed.startsWith("data:")) continue;
+              const payload = trimmed.slice(5).trim();
+              if (payload === "[DONE]") {
+                // Final del stream OpenAI. Emitir nuestro evento 'done'.
+                if (detectedMacros) {
+                  try {
+                    await saveMeal(supabaseAdmin, user.id, detectedMacros);
+                    controller.enqueue(encoder.encode(sseEvent("meal_saved", detectedMacros)));
+                  } catch (e) {
+                    console.error("saveMeal error:", e);
                   }
                 }
+                controller.enqueue(encoder.encode(sseEvent("done", {})));
+                continue;
               }
-            } else if (event.type === "content_block_stop") {
-              controller.enqueue(encoder.encode(sseEvent("block_stop", {})));
-            } else if (event.type === "message_stop") {
-              // Si detectamos macros de una foto, guardar en meals
-              if (detectedMacros) {
-                try {
-                  await saveMeal(supabaseAdmin, user.id, detectedMacros);
-                  controller.enqueue(encoder.encode(sseEvent("meal_saved", detectedMacros)));
-                } catch (e) {
-                  console.error("Error guardando meal:", e);
+              try {
+                const chunk = JSON.parse(payload);
+                const delta = chunk.choices?.[0]?.delta;
+                if (!delta) continue;
+                // OpenAI M3 incluye reasoning_content y content juntos en delta.content
+                const text = delta.content ?? "";
+                if (text) {
+                  fullText += text;
+                  // Emitir el delta al cliente iOS (que ahora no distingue thinking/text,
+                  // sino que lo muestra todo como texto; si queremos separar,
+                  // podemos parsear el <think>...</think> del texto completo).
+                  controller.enqueue(encoder.encode(sseEvent("text", { text })));
+                  // Intentar parsear macros JSON si hay imagen adjunta
+                  if (imageAttachments.length > 0 && !detectedMacros) {
+                    const jsonMatch = extractJson(fullText);
+                    if (jsonMatch) {
+                      try {
+                        const parsed = JSON.parse(jsonMatch);
+                        if (parsed.kcal !== undefined || parsed.protein_g !== undefined || parsed.description) {
+                          detectedMacros = parsed as MacrosAnalysis;
+                        }
+                      } catch (_e) { /* no es JSON válido todavía */ }
+                    }
+                  }
                 }
+                // Si hay tool_calls en el delta
+                if (delta.tool_calls) {
+                  controller.enqueue(encoder.encode(sseEvent("tool_calls", delta.tool_calls)));
+                }
+              } catch (e) {
+                // JSON malformado en chunk, ignorar
               }
-              controller.enqueue(encoder.encode(sseEvent("done", {})));
             }
           }
-
-          // 12. Guardar respuesta completa
-          await saveAssistantMessage(
-            supabaseAdmin,
-            body.conversation_id,
-            fullText,
-            fullThinking
-          );
+          // Guardar respuesta completa del asistente
+          await saveAssistantMessage(supabaseAdmin, body.conversation_id, fullText);
         } catch (err) {
           controller.enqueue(encoder.encode(sseEvent("error", { message: String(err) })));
         } finally {
@@ -229,7 +248,6 @@ function sseEvent(event: string, data: any) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-/** Extrae el primer bloque JSON válido de un texto. */
 function extractJson(text: string): string | null {
   const firstBrace = text.indexOf("{");
   const lastBrace = text.lastIndexOf("}");
@@ -288,14 +306,12 @@ async function saveUserMessage(
 async function saveAssistantMessage(
   supabase: any,
   conversationId: string,
-  content: string,
-  thinking: string
+  content: string
 ) {
   await supabase.from("messages").insert({
     conversation_id: conversationId,
     role: "assistant",
     content,
-    thinking,
   });
   await supabase
     .from("conversations")
@@ -303,7 +319,7 @@ async function saveAssistantMessage(
     .eq("id", conversationId);
 }
 
-async function saveMeal(supabase: any, userId: string, analysis: ImageAnalysis) {
+async function saveMeal(supabase: any, userId: string, analysis: MacrosAnalysis) {
   const { error } = await supabase.from("meals").insert({
     user_id: userId,
     description: analysis.description ?? "Sin descripción",
@@ -328,7 +344,7 @@ function buildSystemPrompt(profile: any, facts: any[]): string {
 
   const profileText = profile
     ? `\n\nPERFIL:\n- Nombre: ${profile.full_name ?? "no indicado"}\n- Objetivo: ${profile.goal ?? "no indicado"}\n- Peso: ${profile.weight_kg ?? "?"} kg, Altura: ${profile.height_cm ?? "?"} cm` +
-      (profile.kcal_target ? `\n- Objetivo diario: ${profile.kcal_target} kcal` : "")
+      (profile.daily_kcal_target ? `\n- Objetivo diario: ${profile.daily_kcal_target} kcal` : "")
     : "";
 
   return `Eres NutriCoach, un dietista-nutricionista español con 15 años de experiencia, especializado en nutrición clínica y deportiva. Hablas en español de España, en tono cercano y directo, basado en evidencia. No sustituyes a un médico.
@@ -350,33 +366,42 @@ Responde de forma clara, concisa y útil.${profileText}${factsText}`;
 function getAgentTools() {
   return [
     {
-      name: "get_user_profile",
-      description: "Obtiene el perfil completo del usuario.",
-      input_schema: { type: "object", properties: {}, required: [] },
-    },
-    {
-      name: "web_search",
-      description: "Busca información en internet (alérgenos, info nutricional, etc).",
-      input_schema: {
-        type: "object",
-        properties: { query: { type: "string", description: "Consulta de búsqueda" } },
-        required: ["query"],
+      type: "function",
+      function: {
+        name: "get_user_profile",
+        description: "Obtiene el perfil completo del usuario.",
+        parameters: { type: "object", properties: {}, required: [] },
       },
     },
     {
-      name: "remember_fact",
-      description: "Guarda un hecho importante sobre el usuario para futuras conversaciones.",
-      input_schema: {
-        type: "object",
-        properties: {
-          category: {
-            type: "string",
-            enum: ["preference", "intolerance", "allergy", "goal", "context", "medical", "family", "habit", "feedback", "observation"],
-          },
-          fact: { type: "string" },
-          confidence: { type: "number", minimum: 0, maximum: 1 },
+      type: "function",
+      function: {
+        name: "web_search",
+        description: "Busca información en internet (alérgenos, info nutricional, etc).",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string", description: "Consulta de búsqueda" } },
+          required: ["query"],
         },
-        required: ["category", "fact"],
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "remember_fact",
+        description: "Guarda un hecho importante sobre el usuario para futuras conversaciones.",
+        parameters: {
+          type: "object",
+          properties: {
+            category: {
+              type: "string",
+              enum: ["preference", "intolerance", "allergy", "goal", "context", "medical", "family", "habit", "feedback", "observation"],
+            },
+            fact: { type: "string" },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+          },
+          required: ["category", "fact"],
+        },
       },
     },
   ];
