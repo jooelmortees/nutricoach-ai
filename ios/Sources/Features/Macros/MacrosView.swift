@@ -10,96 +10,72 @@ struct MacrosView: View {
 
     var body: some View {
         NavigationStack {
-            content
+            ScrollView {
+                VStack(spacing: 16) {
+                    MacrosSummaryCards(viewModel: viewModel)
+                    TargetComparisonView(viewModel: viewModel)
+                    MealsListView(viewModel: viewModel)
+                }
                 .padding()
-        }
-        .navigationTitle("Macros")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await viewModel.refresh() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
+            }
+            .navigationTitle("Macros")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task { await viewModel.refresh() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
                 }
             }
-        }
-        .task {
-            await viewModel.load(userId: auth.profile?.id)
-        }
-        .refreshable {
-            await viewModel.refresh(userId: auth.profile?.id)
-        }
-    }
-
-    private var content: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                summaryCards
-                targetComparison
-                mealsList
+            .task {
+                await viewModel.load(userId: auth.profile?.id)
+            }
+            .refreshable {
+                await viewModel.refresh(userId: auth.profile?.id)
             }
         }
     }
+}
 
-    private var summaryCards: some View {
-        // Cacheamos totals en una let para evitar invocar el computed property
-        // 4 veces y confundir al compilador de Swift con type inference.
+// MARK: - Sub-views (cada una con tipo explícito)
+
+struct MacrosSummaryCards: View {
+    @ObservedObject var viewModel: MacrosViewModel
+
+    var body: some View {
         let t = viewModel.totals
-        return LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-            MacroCard(
-                title: "Calorías",
-                value: "\(Int(t.kcal))",
-                unit: "kcal",
-                icon: "flame.fill",
-                color: Color.orange
-            )
-            MacroCard(
-                title: "Proteínas",
-                value: "\(Int(t.protein))",
-                unit: "g",
-                icon: "figure.strengthtraining.traditional",
-                color: Color.red
-            )
-            MacroCard(
-                title: "Carbohidratos",
-                value: "\(Int(t.carbs))",
-                unit: "g",
-                icon: "leaf.fill",
-                color: Color.green
-            )
-            MacroCard(
-                title: "Grasas",
-                value: "\(Int(t.fat))",
-                unit: "g",
-                icon: "drop.fill",
-                color: Color.yellow
-            )
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+            MacroCard(title: "Calorías", value: "\(Int(t.kcal))", unit: "kcal", icon: "flame.fill", color: Color.orange)
+            MacroCard(title: "Proteínas", value: "\(Int(t.protein))", unit: "g", icon: "figure.strengthtraining.traditional", color: Color.red)
+            MacroCard(title: "Carbohidratos", value: "\(Int(t.carbs))", unit: "g", icon: "leaf.fill", color: Color.green)
+            MacroCard(title: "Grasas", value: "\(Int(t.fat))", unit: "g", icon: "drop.fill", color: Color.yellow)
         }
     }
+}
 
-    private var targetComparison: some View {
+struct TargetComparisonView: View {
+    @ObservedObject var viewModel: MacrosViewModel
+
+    var body: some View {
         let t = viewModel.totals
-        let target = viewModel.profile?.dailyKcalTarget
-        return Group {
+        let target: Int? = viewModel.profile?.dailyKcalTarget
+        VStack(alignment: .leading, spacing: 8) {
             if let target, target > 0 {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Objetivo diario").font(.headline)
-                        Spacer()
-                        Text("\(Int(t.kcal)) / \(target) kcal")
-                            .foregroundStyle(.secondary)
-                    }
-                    ProgressView(value: min(t.kcal / Double(target), 1.0))
-                        .tint(t.kcal > Double(target) ? Color.red : Color.green)
-                    HStack {
-                        Text("Restante: \(max(target - Int(t.kcal), 0)) kcal")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
+                HStack {
+                    Text("Objetivo diario").font(.headline)
+                    Spacer()
+                    Text("\(Int(t.kcal)) / \(target) kcal")
+                        .foregroundStyle(.secondary)
                 }
-                .padding()
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+                ProgressView(value: min(t.kcal / Double(target), 1.0))
+                    .tint(t.kcal > Double(target) ? Color.red : Color.green)
+                HStack {
+                    Text("Restante: \(max(target - Int(t.kcal), 0)) kcal")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
             } else {
                 HStack {
                     Image(systemName: "target").foregroundStyle(.secondary)
@@ -108,13 +84,17 @@ struct MacrosView: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
-                .padding()
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
             }
         }
+        .padding()
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
     }
+}
 
-    private var mealsList: some View {
+struct MealsListView: View {
+    @ObservedObject var viewModel: MacrosViewModel
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Comidas de hoy").font(.headline)
             if viewModel.meals.isEmpty {
@@ -158,25 +138,24 @@ struct MacroCard: View {
 struct MealRow: View {
     let meal: LoggedMeal
 
-    private var iconName: String {
-        switch meal.meal_type {
-        case "breakfast": return "sun.horizon.fill"
-        case "lunch": return "sun.max.fill"
-        case "dinner": return "moon.fill"
-        case "snack": return "leaf.fill"
-        default: return "fork.knife"
-        }
-    }
-
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: iconName)
+            Image(systemName: iconForMeal)
                 .font(.title3)
                 .foregroundStyle(.green)
                 .frame(width: 32)
             VStack(alignment: .leading, spacing: 4) {
                 Text(meal.description).font(.body)
-                macrosLine
+                if let kcal = meal.kcal {
+                    HStack(spacing: 8) {
+                        Text("\(Int(kcal)) kcal")
+                        if let p = meal.protein_g { Text("· P \(Int(p))g") }
+                        if let c = meal.carbs_g { Text("· C \(Int(c))g") }
+                        if let f = meal.fat_g { Text("· G \(Int(f))g") }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
                 Text(meal.consumedAt, format: .dateTime.hour().minute())
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -187,17 +166,13 @@ struct MealRow: View {
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    @ViewBuilder
-    private var macrosLine: some View {
-        if let kcal = meal.kcal {
-            HStack(spacing: 8) {
-                Text("\(Int(kcal)) kcal")
-                if let p = meal.protein_g { Text("· P \(Int(p))g") }
-                if let c = meal.carbs_g { Text("· C \(Int(c))g") }
-                if let f = meal.fat_g { Text("· G \(Int(f))g") }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+    private var iconForMeal: String {
+        switch meal.meal_type {
+        case "breakfast": return "sun.horizon.fill"
+        case "lunch": return "sun.max.fill"
+        case "dinner": return "moon.fill"
+        case "snack": return "leaf.fill"
+        default: return "fork.knife"
         }
     }
 }
