@@ -17,11 +17,56 @@ struct MessageRow: View {
                 if let thinking = message.thinking, !thinking.isEmpty {
                     ThinkingBubble(text: thinking)
                 }
+                if let attachments = message.attachments, !attachments.isEmpty {
+                    AttachmentsGrid(attachments: attachments)
+                }
                 TextBubble(text: message.content, role: message.role, isStreaming: message.isStreaming)
             }
 
             if message.role == .assistant {
                 Spacer(minLength: 60)
+            }
+        }
+    }
+}
+
+/// Grid horizontal de thumbnails de imágenes adjuntas. Muestra la imagen
+/// desde la URL firmada usando AsyncImage.
+struct AttachmentsGrid: View {
+    let attachments: [MessageAttachment]
+
+    var body: some View {
+        let images = attachments.filter { $0.type == "image" }
+        if images.isEmpty { EmptyView() }
+        else {
+            HStack(spacing: 6) {
+                ForEach(images) { att in
+                    AsyncImage(url: URL(string: att.url)) { phase in
+                        switch phase {
+                        case .empty:
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color(.tertiarySystemBackground))
+                                .frame(width: 140, height: 140)
+                                .overlay(ProgressView())
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 140, height: 140)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        case .failure:
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color(.tertiarySystemBackground))
+                                .frame(width: 140, height: 140)
+                                .overlay(
+                                    Image(systemName: "photo")
+                                        .foregroundStyle(.secondary)
+                                )
+                        @unknown default:
+                            EmptyView()
+                        }
+                    }
+                }
             }
         }
     }
@@ -39,7 +84,6 @@ private struct TextBubble: View {
     var body: some View {
         Group {
             if text.isEmpty && isStreaming {
-                // Indicador animado mientras el agente piensa: 1 → 2 → 3 → 1 puntos
                 HStack(spacing: 3) {
                     ForEach(0..<3) { i in
                         Circle()

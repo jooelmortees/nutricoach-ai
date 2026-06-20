@@ -121,12 +121,13 @@ final class AgentService: ObservableObject {
             let role: String
             let content: String
             let thinking: String?
+            let attachments: [MessageAttachment]?
             let created_at: String
         }
         let supabase = SupabaseService.shared.client
         let rows: [Row] = try await supabase
             .from("messages")
-            .select("id,role,content,thinking,created_at")
+            .select("id,role,content,thinking,attachments,created_at")
             .eq("conversation_id", value: conversationId)
             .order("created_at", ascending: true)
             .execute()
@@ -138,6 +139,7 @@ final class AgentService: ObservableObject {
                 role: row.role == "user" ? .user : .assistant,
                 content: row.content,
                 thinking: row.thinking,
+                attachments: row.attachments ?? [],
                 createdAt: row.created_at
             )
         }
@@ -200,5 +202,6 @@ struct HistoryMessage: Identifiable {
     let role: ChatMessage.Role
     let content: String
     let thinking: String?
+    let attachments: [MessageAttachment]
     let createdAt: String
 }

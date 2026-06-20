@@ -32,6 +32,7 @@ final class ChatViewModel: ObservableObject {
                         role: h.role,
                         content: h.content,
                         thinking: h.thinking,
+                        attachments: h.attachments,
                         isStreaming: false
                     )
                 }
@@ -57,12 +58,17 @@ final class ChatViewModel: ObservableObject {
         pendingAttachment = nil
     }
 
-    /// Envía un mensaje al agente. Si hay un attachment pendiente (imagen local
-    /// seleccionada por el usuario), primero la sube a Storage y luego la adjunta.
+    /// Envía un mensaje al agente. Si hay un attachment pendiente, primero
+    /// lo sube a Storage para obtener una URL firmada que se pasa al modelo.
     /// Flujo:
-    /// 1. Si hay pendingAttachment, subir a Storage (con feedback en el placeholder)
-    /// 2. Construir AgentAttachment y enviar al agente con el texto
-    /// 3. Limpiar pendingAttachment
+    /// 1. Subir imagen a Storage
+    /// 2. Crear AgentAttachment con URL firmada
+    /// 3. Construir mensaje con texto + adjuntos
+    /// 4. Añadir mensaje a la UI (con el attachment URL para mostrar thumbnail)
+    /// 5. Enviar al agente via SSE
+    /// 6. NO borrar la imagen: se mantiene en Storage 1h para que el modelo
+    ///    la pueda descargar, y porque el usuario quiere ver su propia foto
+    ///    enviada en el chat. Se borra automaticamente al expirar el signed URL.
     func send(text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasText = !trimmed.isEmpty
@@ -73,8 +79,9 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        // 1. Si hay imagen pendiente, subirla y obtener URL firmada
-        var attachments: [AgentAttachment] = []
+        // 1. Si hay imagen pendiente, subirla a Storage
+        var displayAttachments: [MessageAttachment] = []
+        var agentAttachments: [AgentAttachment] = []
         var displayText = trimmed
         if let attachment = pendingAttachment {
             // Si el usuario no escribió texto, usar uno por defecto
@@ -84,24 +91,29 @@ final class ChatViewModel: ObservableObject {
             do {
                 let url = try await StorageService.shared.uploadMealImage(data: attachment.imageData)
                 AppLogger.info("Imagen subida: \(url)")
-                attachments.append(AgentAttachment(type: "image", url: url))
+                let messageAtt = MessageAttachment(type: "image", url: url)
+                displayAttachments.append(messageAtt)
+                agentAttachments.append(AgentAttachment(type: "image", url: url))
             } catch {
                 errorMessage = "Error con la imagen: \(error.localizedDescription)"
                 return
             }
         }
 
-        // 2. Limpiar attachment pendiente ANTES de enviar para que la UI
-        //    ya no muestre el preview (la imagen ahora viaja al backend)
+        // 2. Limpiar attachment pendiente
         pendingAttachment = nil
 
-        // 3. Añadir mensaje del usuario a la UI
-        let userMsg = ChatMessage(role: .user, content: displayText)
+        // 3. Añadir mensaje del usuario a la UI (con attachments para mostrar)
+        let userMsg = ChatMessage(
+            role: .user,
+            content: displayText,
+            attachments: displayAttachments
+        )
         messages.append(userMsg)
         isAgentThinking = true
         errorMessage = nil
 
-        // 4. Crear placeholder del asistente (se va rellenando con SSE)
+        // 4. Crear placeholder del asistente
         let assistantMsg = ChatMessage(role: .assistant, content: "", isStreaming: true)
         messages.append(assistantMsg)
 
@@ -109,7 +121,7 @@ final class ChatViewModel: ObservableObject {
         await agent.sendMessage(
             conversationId: convId,
             message: displayText,
-            attachments: attachments
+            attachments: agentAttachments
         ) { [weak self] event in
             Task { @MainActor in
                 guard let self else { return }
@@ -117,10 +129,10 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
-        // 6. Borrar imagen de Storage (no la necesitamos, solo el análisis textual)
-        if let url = attachments.first?.url {
-            await StorageService.shared.deleteMealImage(at: url)
-        }
+        // NOTA: NO borramos la imagen de Storage. Razones:
+        // 1. El usuario quiere ver su foto enviada en el chat (thumbnail)
+        // 2. La URL firmada expira en 1h, asi que no hay coste permanente
+        // 3. Si el modelo no soporta vision, queda como evidencia visual
     }
 
     private func handle(event: AgentEvent) {
@@ -161,7 +173,6 @@ final class ChatViewModel: ObservableObject {
     /// El usuario seleccionó una imagen del PhotosPicker. La guardamos en
     /// `pendingAttachment` (solo en memoria) para mostrar preview. NO la subimos
     /// todavía — esperamos a que el usuario pulse enviar.
-    /// Si el usuario ya tenía otra imagen pendiente, la reemplaza.
     func handlePickedImage(_ item: PhotosPickerItem?) async {
         guard let item else { return }
         do {
@@ -169,9 +180,7 @@ final class ChatViewModel: ObservableObject {
                 errorMessage = "No se pudo cargar la imagen"
                 return
             }
-            // Comprimir a JPEG max 2MB
             let compressed = compressImage(data: data, maxBytes: 2 * 1024 * 1024)
-            // Crear preview thumbnail para mostrar en la UI
             guard let previewImage = UIImage(data: compressed) else {
                 errorMessage = "No se pudo procesar la imagen"
                 return
@@ -207,7 +216,7 @@ final class ChatViewModel: ObservableObject {
     }
 }
 
-/// Imagen seleccionada por el usuario que aún no se ha enviado.
+/// Imagen pendiente (aún no enviada).
 struct PendingAttachment: Identifiable, Equatable {
     let id = UUID()
     let imageData: Data
@@ -218,18 +227,38 @@ struct PendingAttachment: Identifiable, Equatable {
     }
 }
 
+/// Attachment ya enviado (con URL firmada para mostrar en el chat).
+struct MessageAttachment: Identifiable, Equatable, Codable {
+    let id = UUID()
+    let type: String  // "image" | "video"
+    let url: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, type, url
+    }
+}
+
 struct ChatMessage: Identifiable {
     let id: UUID
     let role: Role
     var content: String
     var thinking: String?
+    var attachments: [MessageAttachment]?
     var isStreaming: Bool = false
 
-    init(id: UUID = UUID(), role: Role, content: String, thinking: String? = nil, isStreaming: Bool = false) {
+    init(
+        id: UUID = UUID(),
+        role: Role,
+        content: String,
+        thinking: String? = nil,
+        attachments: [MessageAttachment]? = nil,
+        isStreaming: Bool = false
+    ) {
         self.id = id
         self.role = role
         self.content = content
         self.thinking = thinking
+        self.attachments = attachments
         self.isStreaming = isStreaming
     }
 
