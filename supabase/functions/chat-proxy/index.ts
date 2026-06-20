@@ -131,6 +131,9 @@ serve(async (req) => {
         stream: true,
         max_completion_tokens: 16384,
         thinking: { type: "adaptive" },  // M3 con thinking adaptativo
+        reasoning_split: true,  // SEPARA el thinking del content en el streaming
+                                 // -> delta.reasoning_content + delta.content
+                                 // -> nos permite emitir thinking/text al cliente
       }),
     });
 
@@ -180,14 +183,20 @@ serve(async (req) => {
                 const chunk = JSON.parse(payload);
                 const delta = chunk.choices?.[0]?.delta;
                 if (!delta) continue;
-                // OpenAI M3 incluye reasoning_content y content juntos en delta.content
-                const text = delta.content ?? "";
-                if (text) {
-                  fullText += text;
-                  // Emitir el delta al cliente iOS (que ahora no distingue thinking/text,
-                  // sino que lo muestra todo como texto; si queremos separar,
-                  // podemos parsear el <think>...</think> del texto completo).
-                  controller.enqueue(encoder.encode(sseEvent("text", { text })));
+                // Con reasoning_split: true, M3 separa thinking y content:
+                //   delta.reasoning_content = texto de pensamiento
+                //   delta.content          = texto de respuesta final
+                // Emitimos ambos al cliente iOS por separado para que el chat
+                // pueda ocultar el thinking al usuario (o mostrarlo bajo
+                // "Ver razonamiento" plegable).
+                const reasoningText = delta.reasoning_content ?? "";
+                const contentText = delta.content ?? "";
+                if (reasoningText) {
+                  controller.enqueue(encoder.encode(sseEvent("thinking", { text: reasoningText })));
+                }
+                if (contentText) {
+                  fullText += contentText;
+                  controller.enqueue(encoder.encode(sseEvent("text", { text: contentText })));
                   // Intentar parsear macros JSON si hay imagen adjunta
                   if (imageAttachments.length > 0 && !detectedMacros) {
                     const jsonMatch = extractJson(fullText);

@@ -14,7 +14,8 @@ final class ChatViewModel: ObservableObject {
     @Published var isAgentThinking: Bool = false
     @Published var currentConversationId: String?
     @Published var errorMessage: String?
-    @Published var pendingAttachment: PendingAttachment?
+    /// Lista de imagenes pendientes de enviar (aun no subidas a Storage).
+    @Published var pendingAttachments: [PendingAttachment] = []
 
     private let agent = AgentService.shared
 
@@ -48,51 +49,47 @@ final class ChatViewModel: ObservableObject {
             currentConversationId = id
             messages = []
             errorMessage = nil
-            pendingAttachment = nil
+            pendingAttachments = []
         } catch {
             errorMessage = "No se pudo crear conversación: \(error.localizedDescription)"
         }
     }
 
-    func cancelPendingAttachment() {
-        pendingAttachment = nil
+    /// Quita una imagen pendiente por su id (boton X del preview).
+    func removePendingAttachment(id: UUID) {
+        pendingAttachments.removeAll { $0.id == id }
     }
 
-    /// Envía un mensaje al agente. Si hay un attachment pendiente, primero
-    /// lo sube a Storage para obtener una URL firmada que se pasa al modelo.
-    /// Flujo:
-    /// 1. Subir imagen a Storage
-    /// 2. Crear AgentAttachment con URL firmada
-    /// 3. Construir mensaje con texto + adjuntos
-    /// 4. Añadir mensaje a la UI (con el attachment URL para mostrar thumbnail)
-    /// 5. Enviar al agente via SSE
-    /// 6. NO borrar la imagen: se mantiene en Storage 1h para que el modelo
-    ///    la pueda descargar, y porque el usuario quiere ver su propia foto
-    ///    enviada en el chat. Se borra automaticamente al expirar el signed URL.
+    /// Limpia todas las imagenes pendientes.
+    func clearPendingAttachments() {
+        pendingAttachments = []
+    }
+
+    /// Envía un mensaje al agente. Sube TODAS las imagenes pendientes a Storage,
+    /// las adjunta al mensaje, y limpia el estado de preview.
     func send(text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasText = !trimmed.isEmpty
-        let hasAttachment = pendingAttachment != nil
-        guard hasText || hasAttachment else { return }
+        let hasAttachments = !pendingAttachments.isEmpty
+        guard hasText || hasAttachments else { return }
         guard let convId = currentConversationId else {
-            errorMessage = "No hay conversación activa. Espera a que se cargue o crea una nueva."
+            errorMessage = "No hay conversación activa."
             return
         }
 
-        // 1. Si hay imagen pendiente, subirla a Storage
+        // 1. Subir TODAS las imagenes pendientes y construir URLs firmadas
         var displayAttachments: [MessageAttachment] = []
         var agentAttachments: [AgentAttachment] = []
         var displayText = trimmed
-        if let attachment = pendingAttachment {
-            // Si el usuario no escribió texto, usar uno por defecto
-            if !hasText {
-                displayText = "¿Qué macros tiene esta comida?"
-            }
+        if hasAttachments && !hasText {
+            displayText = "¿Qué macros tiene esta comida?"
+        }
+        // Snapshot para evitar race conditions si el user modifica el array
+        let toUpload = pendingAttachments
+        for attachment in toUpload {
             do {
                 let url = try await StorageService.shared.uploadMealImage(data: attachment.imageData)
-                AppLogger.info("Imagen subida: \(url)")
-                let messageAtt = MessageAttachment(type: "image", url: url)
-                displayAttachments.append(messageAtt)
+                displayAttachments.append(MessageAttachment(type: "image", url: url))
                 agentAttachments.append(AgentAttachment(type: "image", url: url))
             } catch {
                 errorMessage = "Error con la imagen: \(error.localizedDescription)"
@@ -100,8 +97,8 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
-        // 2. Limpiar attachment pendiente
-        pendingAttachment = nil
+        // 2. Limpiar adjuntos pendientes (la UI ya no muestra preview)
+        pendingAttachments = []
 
         // 3. Añadir mensaje del usuario a la UI (con attachments para mostrar)
         let userMsg = ChatMessage(
@@ -129,10 +126,10 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
-        // NOTA: NO borramos la imagen de Storage. Razones:
-        // 1. El usuario quiere ver su foto enviada en el chat (thumbnail)
-        // 2. La URL firmada expira en 1h, asi que no hay coste permanente
-        // 3. Si el modelo no soporta vision, queda como evidencia visual
+        // 6. Borrar imagenes de Storage tras enviar (1h de expiracion del signed URL
+        //    deberia ser suficiente para que el cliente las muestre).
+        //    NOTA: NO borramos hasta que el user salga del chat, para que
+        //    los thumbnails sigan visibles todo el rato.
     }
 
     private func handle(event: AgentEvent) {
@@ -164,31 +161,25 @@ final class ChatViewModel: ObservableObject {
             if let idx = messages.indices.last, messages[idx].role == .assistant && messages[idx].isStreaming {
                 messages[idx].isStreaming = false
                 if messages[idx].content.isEmpty {
-                    messages[idx].content = "⚠️ Error: \(msg)"
+                    messages[idx].content = "⚠️ \(msg)"
                 }
             }
         }
     }
 
-    /// El usuario seleccionó una imagen del PhotosPicker. La guardamos en
-    /// `pendingAttachment` (solo en memoria) para mostrar preview. NO la subimos
-    /// todavía — esperamos a que el usuario pulse enviar.
-    func handlePickedImage(_ item: PhotosPickerItem?) async {
-        guard let item else { return }
-        do {
-            guard let data = try await item.loadTransferable(type: Data.self) else {
-                errorMessage = "No se pudo cargar la imagen"
-                return
+    /// El usuario seleccionó N imagenes del PhotosPicker. Las añadimos al
+    /// preview sin subirlas todavia (se subiran al enviar).
+    func handlePickedImages(_ items: [PhotosPickerItem]) async {
+        for item in items {
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else { continue }
+                let compressed = compressImage(data: data, maxBytes: 2 * 1024 * 1024)
+                guard let previewImage = UIImage(data: compressed) else { continue }
+                let attachment = PendingAttachment(imageData: compressed, preview: previewImage)
+                pendingAttachments.append(attachment)
+            } catch {
+                AppLogger.warning("No se pudo cargar imagen: \(error.localizedDescription)")
             }
-            let compressed = compressImage(data: data, maxBytes: 2 * 1024 * 1024)
-            guard let previewImage = UIImage(data: compressed) else {
-                errorMessage = "No se pudo procesar la imagen"
-                return
-            }
-            pendingAttachment = PendingAttachment(imageData: compressed, preview: previewImage)
-            errorMessage = nil
-        } catch {
-            errorMessage = "Error con la imagen: \(error.localizedDescription)"
         }
     }
 
@@ -201,7 +192,7 @@ final class ChatViewModel: ObservableObject {
         return parts.joined(separator: " · ")
     }
 
-    /// Comprime una imagen JPEG hasta que esté por debajo de maxBytes.
+    /// Comprime una imagen JPEG hasta maxBytes.
     private func compressImage(data: Data, maxBytes: Int) -> Data {
         guard let image = UIImage(data: data) else { return data }
         var quality: CGFloat = 0.8
@@ -216,7 +207,8 @@ final class ChatViewModel: ObservableObject {
     }
 }
 
-/// Imagen pendiente (aún no enviada).
+/// Imagen pendiente (aún no enviada). Equivalente a un item del PhotosPicker
+/// que se ha cargado pero no se ha subido a Storage todavía.
 struct PendingAttachment: Identifiable, Equatable {
     let id = UUID()
     let imageData: Data

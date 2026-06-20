@@ -6,6 +6,7 @@ import SwiftUI
 
 struct MessageRow: View {
     let message: ChatMessage
+    let onImageTap: (String) -> Void
 
     var body: some View {
         HStack {
@@ -14,11 +15,13 @@ struct MessageRow: View {
             }
 
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
+                // Thinking oculto en pantalla (plegable tras "Ver razonamiento")
                 if let thinking = message.thinking, !thinking.isEmpty {
                     ThinkingBubble(text: thinking)
                 }
+                // Imagenes adjuntas
                 if let attachments = message.attachments, !attachments.isEmpty {
-                    AttachmentsGrid(attachments: attachments)
+                    AttachmentsGrid(attachments: attachments, onImageTap: onImageTap)
                 }
                 TextBubble(text: message.content, role: message.role, isStreaming: message.isStreaming)
             }
@@ -30,45 +33,93 @@ struct MessageRow: View {
     }
 }
 
-/// Grid horizontal de thumbnails de imágenes adjuntas. Muestra la imagen
-/// desde la URL firmada usando AsyncImage.
+/// Grid horizontal de thumbnails. Tap para fullscreen.
 struct AttachmentsGrid: View {
     let attachments: [MessageAttachment]
+    let onImageTap: (String) -> Void
 
     var body: some View {
         let images = attachments.filter { $0.type == "image" }
-        if images.isEmpty { EmptyView() }
-        else {
-            HStack(spacing: 6) {
-                ForEach(images) { att in
-                    AsyncImage(url: URL(string: att.url)) { phase in
-                        switch phase {
-                        case .empty:
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color(.tertiarySystemBackground))
-                                .frame(width: 140, height: 140)
-                                .overlay(ProgressView())
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 140, height: 140)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                        case .failure:
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color(.tertiarySystemBackground))
-                                .frame(width: 140, height: 140)
-                                .overlay(
-                                    Image(systemName: "photo")
-                                        .foregroundStyle(.secondary)
-                                )
-                        @unknown default:
-                            EmptyView()
+        if images.isEmpty {
+            EmptyView()
+        } else if images.count == 1 {
+            // Una sola imagen: mas grande
+            singleImage(images[0])
+        } else {
+            multipleImages(images)
+        }
+    }
+
+    @ViewBuilder
+    private func singleImage(_ att: MessageAttachment) -> some View {
+        AsyncImage(url: URL(string: att.url)) { phase in
+            switch phase {
+            case .empty:
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color(.tertiarySystemBackground))
+                    .frame(maxWidth: 240, maxHeight: 320)
+                    .overlay(ProgressView())
+            case .success(let image):
+                image
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: 240, maxHeight: 320)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .onTapGesture { onImageTap(att.url) }
+            case .failure:
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color(.tertiarySystemBackground))
+                    .frame(width: 240, height: 240)
+                    .overlay(
+                        VStack(spacing: 4) {
+                            Image(systemName: "photo").foregroundStyle(.secondary)
+                            Text("Imagen no disponible")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
+                    )
+            @unknown default:
+                EmptyView()
+            }
+        }
+    }
+
+    private func multipleImages(_ images: [MessageAttachment]) -> some View {
+        // Layout en grid 2x2 para 2-4 imagenes
+        let columns = [
+            GridItem(.flexible(), spacing: 4),
+            GridItem(.flexible(), spacing: 4)
+        ]
+        return LazyVGrid(columns: columns, spacing: 4) {
+            ForEach(images.prefix(4), id: \.url) { att in
+                AsyncImage(url: URL(string: att.url)) { phase in
+                    switch phase {
+                    case .empty:
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(.tertiarySystemBackground))
+                            .frame(height: 120)
+                            .overlay(ProgressView())
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                            .frame(height: 120)
+                            .frame(maxWidth: .infinity)
+                            .clipped()
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .onTapGesture { onImageTap(att.url) }
+                    case .failure:
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(.tertiarySystemBackground))
+                            .frame(height: 120)
+                            .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
+                    @unknown default:
+                        EmptyView()
                     }
                 }
             }
         }
+        .frame(maxWidth: 260)
     }
 }
 
@@ -84,6 +135,7 @@ private struct TextBubble: View {
     var body: some View {
         Group {
             if text.isEmpty && isStreaming {
+                // 3 circulos pequenos que parpadean (estilo Gemini)
                 HStack(spacing: 3) {
                     ForEach(0..<3) { i in
                         Circle()
