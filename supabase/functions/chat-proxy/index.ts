@@ -151,6 +151,7 @@ serve(async (req) => {
         let buffer = "";
         let fullText = "";
         let detectedMacros: MacrosAnalysis | null = null;
+        let savedMealFlag = false;
 
         try {
           while (true) {
@@ -167,16 +168,9 @@ serve(async (req) => {
               if (!trimmed || !trimmed.startsWith("data:")) continue;
               const payload = trimmed.slice(5).trim();
               if (payload === "[DONE]") {
-                // Final del stream OpenAI. Emitir nuestro evento 'done'.
-                if (detectedMacros) {
-                  try {
-                    await saveMeal(supabaseAdmin, user.id, detectedMacros);
-                    controller.enqueue(encoder.encode(sseEvent("meal_saved", detectedMacros)));
-                  } catch (e) {
-                    console.error("saveMeal error:", e);
-                  }
-                }
-                controller.enqueue(encoder.encode(sseEvent("done", {})));
+                // Final del stream OpenAI (algunos servers envian [DONE]).
+                // NO emitimos 'done' aqui porque lo hacemos en el finally para
+                // garantizar que SIEMPRE llegue (incluso si M3 no envia [DONE]).
                 continue;
               }
               try {
@@ -222,8 +216,22 @@ serve(async (req) => {
           // Guardar respuesta completa del asistente
           await saveAssistantMessage(supabaseAdmin, body.conversation_id, fullText);
         } catch (err) {
+          // Emitimos un evento de error para que el cliente sepa que fallo
           controller.enqueue(encoder.encode(sseEvent("error", { message: String(err) })));
         } finally {
+          // SIEMPRE emitimos 'done' al final del stream (incluso si hubo error).
+          // Esto garantiza que el cliente Swift no quede colgado con
+          // isAgentThinking = true esperando el evento que nunca llega.
+          if (detectedMacros && !savedMealFlag) {
+            try {
+              await saveMeal(supabaseAdmin, user.id, detectedMacros);
+              controller.enqueue(encoder.encode(sseEvent("meal_saved", detectedMacros)));
+              savedMealFlag = true;
+            } catch (e) {
+              console.error("saveMeal error:", e);
+            }
+          }
+          controller.enqueue(encoder.encode(sseEvent("done", {})));
           controller.close();
         }
       },

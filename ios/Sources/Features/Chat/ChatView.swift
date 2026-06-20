@@ -86,8 +86,7 @@ struct ChatView: View {
             if !viewModel.pendingAttachments.isEmpty {
                 PendingAttachmentsStrip(
                     attachments: viewModel.pendingAttachments,
-                    onRemove: { id in viewModel.removePendingAttachment(id: id) },
-                    onClearAll: { viewModel.clearPendingAttachments() }
+                    onRemove: { id in viewModel.removePendingAttachment(id: id) }
                 )
                 .padding(.horizontal, 16)
             }
@@ -159,10 +158,14 @@ struct ChatView: View {
     }
 
     private func send() async {
+        // Limpiar inputText, focus y selectedItems ANTES del await para que
+        // el UI se sienta inmediato y no parezca que el boton "no hace nada"
+        // (que era el bug reportado: el texto se quedaba y habia que cerrar
+        // la app si el stream se colgaba sin 'done').
         let text = inputText
-        await viewModel.send(text: text)
         inputText = ""
         inputFocused = false
+        await viewModel.send(text: text)
     }
 }
 
@@ -177,7 +180,6 @@ private struct ImageViewerID: Identifiable {
 struct PendingAttachmentsStrip: View {
     let attachments: [PendingAttachment]
     let onRemove: (UUID) -> Void
-    let onClearAll: () -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -198,20 +200,6 @@ struct PendingAttachmentsStrip: View {
                                 .foregroundStyle(.white, Color.black.opacity(0.6))
                         }
                         .offset(x: 4, y: -4)
-                    }
-                }
-                // Boton para limpiar todas (solo si hay > 1)
-                if attachments.count > 1 {
-                    Button(action: onClearAll) {
-                        VStack {
-                            Image(systemName: "trash")
-                                .font(.title3)
-                            Text("Limpiar")
-                                .font(.caption2)
-                        }
-                        .foregroundStyle(.secondary)
-                        .frame(width: 72, height: 72)
-                        .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
                     }
                 }
             }

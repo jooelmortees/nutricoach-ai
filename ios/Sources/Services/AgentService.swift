@@ -62,10 +62,9 @@ final class AgentService: ObservableObject {
             // Parser SSE: lee líneas, agrupa por bloques separados por línea
             // vacía. Cada bloque es `event: <type>\ndata: <json>`.
             var currentEvent: String?
+            var receivedDone = false
             for try await line in bytes.lines {
                 if line.isEmpty {
-                    // Fin de bloque (pero el bloque completo viene en una
-                    // sola iteración porque ya teníamos event/data)
                     currentEvent = nil
                     continue
                 }
@@ -76,12 +75,24 @@ final class AgentService: ObservableObject {
                 if line.hasPrefix("data:") {
                     let data = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
                     if let event = parseSSE(type: currentEvent, data: data) {
+                        if case .done = event {
+                            receivedDone = true
+                        }
                         onEvent(event)
                     }
                 }
             }
+            // SAFETY NET: si el stream termina sin un evento 'done' (porque el
+            // servidor no lo emite, timeout, red inestable, etc.) forzamos
+            // 'done' para que el UI no quede con isAgentThinking=true para siempre.
+            if !receivedDone {
+                AppLogger.warning("Stream SSE termino sin evento 'done'. Forzando done.")
+                onEvent(.done)
+            }
         } catch {
             onEvent(.error(error.localizedDescription))
+            // Incluso si hubo error, emitir 'done' para resetear el UI
+            onEvent(.done)
         }
     }
 

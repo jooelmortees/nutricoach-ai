@@ -34,16 +34,21 @@ struct MessageRow: View {
 }
 
 /// Grid horizontal de thumbnails. Tap para fullscreen.
+/// Thumbnails compactos para que quepan mas imagenes por mensaje.
 struct AttachmentsGrid: View {
     let attachments: [MessageAttachment]
     let onImageTap: (String) -> Void
+
+    /// Tamano del thumbnail en el grid. Compacto para que quepan mas.
+    private let thumbSize: CGFloat = 70
+    private let cornerRadius: CGFloat = 8
 
     var body: some View {
         let images = attachments.filter { $0.type == "image" }
         if images.isEmpty {
             EmptyView()
         } else if images.count == 1 {
-            // Una sola imagen: mas grande
+            // Una sola imagen: un poco mas grande para verla bien
             singleImage(images[0])
         } else {
             multipleImages(images)
@@ -55,28 +60,24 @@ struct AttachmentsGrid: View {
         AsyncImage(url: URL(string: att.url)) { phase in
             switch phase {
             case .empty:
-                RoundedRectangle(cornerRadius: 16)
+                RoundedRectangle(cornerRadius: cornerRadius)
                     .fill(Color(.tertiarySystemBackground))
-                    .frame(maxWidth: 240, maxHeight: 320)
+                    .frame(width: thumbSize * 1.8, height: thumbSize * 1.8)
                     .overlay(ProgressView())
             case .success(let image):
                 image
                     .resizable()
                     .scaledToFill()
-                    .frame(maxWidth: 240, maxHeight: 320)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .frame(width: thumbSize * 1.8, height: thumbSize * 1.8)
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                     .onTapGesture { onImageTap(att.url) }
             case .failure:
-                RoundedRectangle(cornerRadius: 16)
+                RoundedRectangle(cornerRadius: cornerRadius)
                     .fill(Color(.tertiarySystemBackground))
-                    .frame(width: 240, height: 240)
+                    .frame(width: thumbSize * 1.8, height: thumbSize * 1.8)
                     .overlay(
-                        VStack(spacing: 4) {
-                            Image(systemName: "photo").foregroundStyle(.secondary)
-                            Text("Imagen no disponible")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
+                        Image(systemName: "photo")
+                            .foregroundStyle(.secondary)
                     )
             @unknown default:
                 EmptyView()
@@ -85,41 +86,45 @@ struct AttachmentsGrid: View {
     }
 
     private func multipleImages(_ images: [MessageAttachment]) -> some View {
-        // Layout en grid 2x2 para 2-4 imagenes
-        let columns = [
-            GridItem(.flexible(), spacing: 4),
-            GridItem(.flexible(), spacing: 4)
+        // Grid horizontal scrollable con thumbnails pequenos.
+        // En lugar de grid 2x2 (que ocupa mucho), uso una fila horizontal
+        // que cabe bien en pantalla y permite mas imagenes.
+        let cols = [
+            GridItem(.fixed(thumbSize), spacing: 4),
+            GridItem(.fixed(thumbSize), spacing: 4),
+            GridItem(.fixed(thumbSize), spacing: 4),
         ]
-        return LazyVGrid(columns: columns, spacing: 4) {
-            ForEach(images.prefix(4), id: \.url) { att in
-                AsyncImage(url: URL(string: att.url)) { phase in
-                    switch phase {
-                    case .empty:
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color(.tertiarySystemBackground))
-                            .frame(height: 120)
-                            .overlay(ProgressView())
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                            .frame(height: 120)
-                            .frame(maxWidth: .infinity)
-                            .clipped()
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .onTapGesture { onImageTap(att.url) }
-                    case .failure:
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color(.tertiarySystemBackground))
-                            .frame(height: 120)
-                            .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
-                    @unknown default:
-                        EmptyView()
+        return ScrollView(.horizontal, showsIndicators: false) {
+            LazyHGrid(rows: [GridItem(.fixed(thumbSize))], spacing: 4) {
+                ForEach(images, id: \.url) { att in
+                    AsyncImage(url: URL(string: att.url)) { phase in
+                        switch phase {
+                        case .empty:
+                            RoundedRectangle(cornerRadius: cornerRadius)
+                                .fill(Color(.tertiarySystemBackground))
+                                .frame(width: thumbSize, height: thumbSize)
+                                .overlay(ProgressView().scaleEffect(0.7))
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: thumbSize, height: thumbSize)
+                                .clipped()
+                                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                                .onTapGesture { onImageTap(att.url) }
+                        case .failure:
+                            RoundedRectangle(cornerRadius: cornerRadius)
+                                .fill(Color(.tertiarySystemBackground))
+                                .frame(width: thumbSize, height: thumbSize)
+                                .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
+                        @unknown default:
+                            EmptyView()
+                        }
                     }
                 }
             }
         }
-        .frame(maxWidth: 260)
+        .frame(height: thumbSize)
     }
 }
 
