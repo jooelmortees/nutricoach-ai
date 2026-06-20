@@ -9,32 +9,10 @@ struct MacrosView: View {
     @StateObject private var viewModel = MacrosViewModel()
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 16) {
-                    MacrosSummaryCards(viewModel: viewModel)
-                    TargetComparisonView(viewModel: viewModel)
-                    MealsListView(viewModel: viewModel)
-                }
-                .padding()
-            }
-            .navigationTitle("Macros")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await viewModel.refresh() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                }
-            }
+        Text("Macros").padding()
             .task {
                 await viewModel.load(userId: auth.profile?.id)
             }
-            .refreshable {
-                await viewModel.refresh(userId: auth.profile?.id)
-            }
-        }
     }
 }
 
