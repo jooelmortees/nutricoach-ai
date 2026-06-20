@@ -60,7 +60,6 @@ struct ChatView: View {
                 withAnimation { proxy.scrollTo(viewModel.messages.last?.id, anchor: .bottom) }
             }
             .onChange(of: viewModel.messages.last?.content) { _, _ in
-                // Auto-scroll mientras el texto llega en streaming
                 if let lastId = viewModel.messages.last?.id {
                     withAnimation { proxy.scrollTo(lastId, anchor: .bottom) }
                 }
@@ -70,22 +69,28 @@ struct ChatView: View {
 
     private var inputBar: some View {
         VStack(spacing: 8) {
-            if let pending = viewModel.pendingImageDescription {
-                HStack(spacing: 8) {
-                    Image(systemName: "photo.fill").foregroundStyle(.green)
-                    Text(pending).font(.caption).lineLimit(1)
-                    Spacer()
-                    ProgressView().scaleEffect(0.8)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+            // Preview de la imagen pendiente (estilo Gemini: thumbnail con X para quitar)
+            if let pending = viewModel.pendingAttachment {
+                PendingAttachmentPreview(
+                    image: pending.preview,
+                    onCancel: {
+                        viewModel.cancelPendingAttachment()
+                        selectedImage = nil
+                    }
+                )
                 .padding(.horizontal, 16)
+                .transition(.scale.combined(with: .opacity))
             }
             Divider()
             HStack(spacing: 12) {
-                PhotosPicker(selection: $selectedImage, matching: .images) {
-                    Image(systemName: "photo.on.rectangle")
+                PhotosPicker(
+                    selection: $selectedImage,
+                    matching: .images,
+                    photoLibrary: .shared()
+                ) {
+                    Image(systemName: viewModel.pendingAttachment == nil
+                          ? "photo.on.rectangle"
+                          : "photo.fill")
                         .font(.title3)
                         .foregroundStyle(.green)
                 }
@@ -93,17 +98,21 @@ struct ChatView: View {
                     Task { await viewModel.handlePickedImage(item) }
                 }
 
-                TextField("Pregúntale a tu dietista...", text: $inputText, axis: .vertical)
-                    .focused($inputFocused)
-                    .lineLimit(1...5)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 20))
-                    .submitLabel(.send)
-                    .onSubmit {
-                        Task { await send() }
-                    }
+                TextField(
+                    inputPlaceholder,
+                    text: $inputText,
+                    axis: .vertical
+                )
+                .focused($inputFocused)
+                .lineLimit(1...5)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(.secondarySystemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .submitLabel(.send)
+                .onSubmit {
+                    Task { await send() }
+                }
 
                 Button {
                     Task { await send() }
@@ -112,29 +121,73 @@ struct ChatView: View {
                         .font(.system(size: 32))
                         .foregroundStyle(.green)
                 }
-                .disabled(inputText.isEmpty || viewModel.isAgentThinking)
+                .disabled(!canSend)
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
         }
         .background(.bar)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.pendingAttachment)
+    }
+
+    private var inputPlaceholder: String {
+        viewModel.pendingAttachment != nil
+            ? "Pregunta sobre la imagen..."
+            : "Pregúntale a tu dietista..."
+    }
+
+    private var canSend: Bool {
+        let hasText = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasAttachment = viewModel.pendingAttachment != nil
+        return (hasText || hasAttachment) && !viewModel.isAgentThinking
     }
 
     private func send() async {
-        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || viewModel.pendingImageDescription != nil else { return }
-        await viewModel.send(text)
+        let text = inputText
+        await viewModel.send(text: text)
         inputText = ""
+        selectedImage = nil
         inputFocused = false
     }
 }
 
-struct ThinkingIndicator: View {
-    @State private var dots: Int = 0
-    let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+/// Preview de imagen pendiente estilo Gemini: thumbnail con botón X.
+struct PendingAttachmentPreview: View {
+    let image: UIImage
+    let onCancel: () -> Void
 
     var body: some View {
-        EmptyView()
+        HStack(spacing: 12) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.green.opacity(0.4), lineWidth: 1)
+                )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Imagen lista para enviar")
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                Text("Escribe tu pregunta y pulsa enviar")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button(action: onCancel) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
