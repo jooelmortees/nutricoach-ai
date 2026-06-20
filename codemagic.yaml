@@ -63,8 +63,20 @@ workflows:
           EXIT=$?
           echo "=== BUILD EXIT CODE: $EXIT ==="
           echo ""
-          echo "=== Errores de compilacion (si los hay) ==="
-          grep -E "error:|warning:|cannot find|use of unresolved|expected" build/xcodebuild.log | head -40 || echo "(sin errores/warnings)"
+          echo "=== Todos los errores (sin filtro, para no perder contexto) ==="
+          grep -E "error:" build/xcodebuild.log | head -40 || echo "(sin errores)"
+          echo ""
+          echo "=== Contexto 50 lineas alrededor de 'failed to produce diagnostic' ==="
+          grep -n "failed to produce diagnostic" build/xcodebuild.log | head -5
+          LINE=$(grep -n "failed to produce diagnostic" build/xcodebuild.log | head -1 | cut -d: -f1)
+          if [ -n "$LINE" ]; then
+            START=$((LINE > 100 ? LINE - 100 : 1))
+            END=$((LINE + 100))
+            sed -n "${START},${END}p" build/xcodebuild.log
+          fi
+          echo ""
+          echo "=== Errores por archivo (resumen) ==="
+          grep -E "error:" build/xcodebuild.log | grep -oE "[A-Za-z]+\.swift:[0-9]+:[0-9]+:" | sort -u
           echo ""
           echo "=== Ultimas 30 lineas del log ==="
           tail -30 build/xcodebuild.log
