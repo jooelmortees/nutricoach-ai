@@ -187,26 +187,16 @@ final class ChatViewModel: ObservableObject {
     /// Usado por el boton "Guardar en mi dia" que aparece cuando M3 devuelve
     /// macros en formato JSON.
     func saveMeal(_ meal: PendingMeal) async {
-        guard let userId = currentConversationId ?? (try? await SupabaseService.shared.client.auth.session.user.id.uuidString) else {
-            errorMessage = "No se pudo identificar al usuario"
+        // 1. Obtener userId del cliente Supabase (sesion activa)
+        let userId: String
+        do {
+            userId = try await SupabaseService.shared.client.auth.session.user.id.uuidString
+        } catch {
+            errorMessage = "Error de sesion: \(error.localizedDescription)"
             return
         }
-        // Si tenemos currentConversationId, el user esta autenticado
-        let actualUserId: String
-        if let _ = currentConversationId {
-            // Necesitamos el user ID del cliente Supabase
-            do {
-                actualUserId = try await SupabaseService.shared.client.auth.session.user.id.uuidString
-            } catch {
-                errorMessage = "Error de sesión"
-                return
-            }
-        } else {
-            actualUserId = userId
-        }
-        _ = actualUserId  // suppress unused warning, used in struct
 
-        // Insertar en meals via Supabase
+        // 2. Insertar en meals
         struct InsertPayload: Encodable {
             let user_id: String
             let description: String
@@ -219,7 +209,7 @@ final class ChatViewModel: ObservableObject {
             let source: String
         }
         let payload = InsertPayload(
-            user_id: actualUserId,
+            user_id: userId,
             description: meal.description,
             meal_type: meal.meal_type,
             kcal: meal.kcal,
@@ -238,7 +228,7 @@ final class ChatViewModel: ObservableObject {
             // Mensaje de confirmacion en el chat
             messages.append(ChatMessage(
                 role: .assistant,
-                content: "✅ Guardado: **\(meal.description)** en tu registro de comidas del día."
+                content: "Guardado: **\(meal.description)** en tu registro de comidas del dia."
             ))
         } catch {
             errorMessage = "Error guardando comida: \(error.localizedDescription)"
