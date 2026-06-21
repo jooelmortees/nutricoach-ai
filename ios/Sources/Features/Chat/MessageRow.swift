@@ -8,6 +8,10 @@ struct MessageRow: View {
     let message: ChatMessage
     let onImageTap: (String) -> Void
     let onSaveMeal: (PendingMeal) -> Void
+    /// Callback para "Regenerar" (solo en el ultimo mensaje del asistente).
+    var onRegenerate: (() -> Void)? = nil
+    /// Callback para "Reintentar" (solo si el mensaje fallo).
+    var onRetry: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top) {
@@ -31,11 +35,46 @@ struct MessageRow: View {
                     isStreaming: message.isStreaming,
                     onSaveMeal: onSaveMeal
                 )
+                // Acciones debajo del mensaje (regenerar para assistant,
+                // reintentar para user que fallo)
+                messageActions
             }
 
             if message.role == .assistant {
                 Spacer(minLength: 60)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var messageActions: some View {
+        // Solo mostrar acciones si el mensaje no esta streaming
+        if !message.isStreaming {
+            HStack(spacing: 12) {
+                // Boton regenerar (solo en assistant messages)
+                if message.role == .assistant, let onRegenerate {
+                    Button(action: onRegenerate) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.clockwise")
+                            Text("Regenerar")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                // Boton reintentar (solo en user messages con error)
+                if message.role == .user, let onRetry {
+                    Button(action: onRetry) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle")
+                            Text("Reintentar")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                    }
+                }
+            }
+            .padding(.horizontal, 4)
         }
     }
 }
@@ -186,6 +225,7 @@ private struct TextBubble: View {
     private let timer = Timer.publish(every: 0.45, on: .main, in: .common).autoconnect()
 
     var body: some View {
+        // ContextMenu aparece con long press: copiar, regenerar, reintentar
         VStack(alignment: .leading, spacing: 8) {
             // Si esta vacio y esta streaming, mostrar 3 circulos
             if text.isEmpty && isStreaming {
@@ -223,6 +263,21 @@ private struct TextBubble: View {
         .background(bg, in: RoundedRectangle(cornerRadius: 16))
         .foregroundStyle(fg)
         .frame(maxWidth: .infinity, alignment: role == .user ? .trailing : .leading)
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = text
+            } label: {
+                Label("Copiar", systemImage: "doc.on.doc")
+            }
+            if role == .assistant {
+                Button {
+                    // Esto se inyecta desde fuera via onRegenerate
+                } label: {
+                    Label("Regenerar", systemImage: "arrow.clockwise")
+                }
+                .disabled(true)  // El real callback se inyecta via messageActions
+            }
+        }
     }
 
     private var bg: Color {

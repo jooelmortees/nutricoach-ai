@@ -55,6 +55,39 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// Limpia la conversacion actual: borra todos los mensajes y adjuntos pendientes.
+    func clearConversation() {
+        messages = []
+        errorMessage = nil
+        pendingAttachments = []
+    }
+
+    /// Regenera la ultima respuesta del asistente. Toma el ultimo mensaje del
+    /// usuario, lo reenvia, y reemplaza la respuesta del asistente.
+    func regenerateLastResponse() async {
+        guard currentConversationId != nil else { return }
+        // Buscar el ultimo user message
+        guard let lastUserIdx = messages.lastIndex(where: { $0.role == .user }) else { return }
+        let lastUser = messages[lastUserIdx]
+        // Eliminar todos los mensajes posteriores al user (assistant + posteriores)
+        let newMessages = Array(messages.prefix(lastUserIdx + 1))
+        messages = newMessages
+        // Reenviar (sin adjuntos, ya estan en BD)
+        isAgentThinking = true
+        let assistantMsg = ChatMessage(role: .assistant, content: "", isStreaming: true)
+        messages.append(assistantMsg)
+        await agent.sendMessage(
+            conversationId: currentConversationId!,
+            message: lastUser.content,
+            attachments: []
+        ) { [weak self] event in
+            Task { @MainActor in
+                guard let self else { return }
+                self.handle(event: event)
+            }
+        }
+    }
+
     /// Quita una imagen pendiente por su id (boton X del preview).
     func removePendingAttachment(id: UUID) {
         pendingAttachments.removeAll { $0.id == id }

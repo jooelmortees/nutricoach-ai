@@ -14,6 +14,7 @@ struct ChatView: View {
     @FocusState private var inputFocused: Bool
     /// Imagen abierta en fullscreen (tap en thumbnail).
     @State private var fullscreenImageURL: String?
+    @State private var showClearConfirm: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -25,10 +26,27 @@ struct ChatView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await viewModel.newConversation() }
+                    Menu {
+                        Button {
+                            Task { await viewModel.newConversation() }
+                        } label: {
+                            Label("Nueva conversación", systemImage: "plus.bubble.fill")
+                        }
+                        Button {
+                            // Regenerar la ultima respuesta
+                            Task { await viewModel.regenerateLastResponse() }
+                        } label: {
+                            Label("Regenerar respuesta", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(viewModel.messages.last(where: { $0.role == .user }) == nil || viewModel.isAgentThinking)
+                        Divider()
+                        Button(role: .destructive) {
+                            showClearConfirm = true
+                        } label: {
+                            Label("Limpiar chat", systemImage: "trash")
+                        }
                     } label: {
-                        Image(systemName: "plus.bubble.fill")
+                        Image(systemName: "ellipsis.circle")
                     }
                 }
             }
@@ -47,6 +65,14 @@ struct ChatView: View {
                     fullscreenImageURL = nil
                 }
             }
+            .confirmationDialog("¿Limpiar el chat?", isPresented: $showClearConfirm) {
+                Button("Limpiar", role: .destructive) {
+                    viewModel.clearConversation()
+                }
+                Button("Cancelar", role: .cancel) {}
+            } message: {
+                Text("Se borrarán los mensajes de esta conversación en pantalla. La conversación seguirá existiendo en la base de datos.")
+            }
         }
     }
 
@@ -59,13 +85,16 @@ struct ChatView: View {
                             viewModel.errorMessage = nil
                         }
                     }
-                    ForEach(viewModel.messages) { msg in
+                    ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, msg in
                         MessageRow(
                             message: msg,
                             onImageTap: { url in fullscreenImageURL = url },
                             onSaveMeal: { meal in
                                 Task { await viewModel.saveMeal(meal) }
-                            }
+                            },
+                            onRegenerate: isLastAssistant(index: index) ? {
+                                Task { await viewModel.regenerateLastResponse() }
+                            } : nil
                         )
                         .id(msg.id)
                     }
@@ -170,6 +199,22 @@ struct ChatView: View {
         inputText = ""
         inputFocused = false
         await viewModel.send(text: text)
+    }
+
+    /// True si el mensaje en `index` es el ULTIMO mensaje del asistente
+    /// (no streaming). Solo ese muestra el boton "Regenerar".
+    private func isLastAssistant(index: Int) -> Bool {
+        let msgs = viewModel.messages
+        guard index < msgs.count else { return false }
+        guard msgs[index].role == .assistant else { return false }
+        guard !msgs[index].isStreaming else { return false }
+        // Verificar que no hay otro assistant despues
+        for i in (index + 1)..<msgs.count {
+            if msgs[i].role == .assistant && !msgs[i].isStreaming {
+                return false
+            }
+        }
+        return true
     }
 }
 
