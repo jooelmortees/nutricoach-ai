@@ -201,7 +201,7 @@ private struct TextBubble: View {
                 .onReceive(timer) { _ in
                     dots = (dots % 3) + 1
                 }
-            } else if let extracted = PendingMeal.extract(from: text) {
+            } else if let extracted = PendingMeal.extract(from: text), let macros = extracted.macros {
                 // Caso 1: se detectaron macros en el texto
                 VStack(alignment: .leading, spacing: 8) {
                     // Texto sin el JSON (markdown renderizado)
@@ -209,8 +209,8 @@ private struct TextBubble: View {
                         MarkdownText(text: extracted.cleaned)
                     }
                     // Tarjeta de macros
-                    MacrosCard(meal: extracted.macros, onSave: {
-                        onSaveMeal(extracted.macros)
+                    MacrosCard(meal: macros, onSave: {
+                        onSaveMeal(macros)
                     })
                 }
             } else {
