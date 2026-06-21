@@ -12,15 +12,14 @@ struct DashboardView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 16) {
-                    if !viewModel.hasAuthorizedHealthKit {
-                        healthKitPrompt
-                    }
+                VStack(spacing: 20) {
+                    // Header: saludo + kcal restantes
+                    headerCard
+                    // 4 metricas principales
                     summaryCards
-                    if viewModel.isSyncing {
-                        HStack { ProgressView(); Text("Sincronizando HealthKit...") }
-                            .padding()
-                    }
+                    // Grafico de pasos (ultimos 7 dias)
+                    weeklyChart
+                    // Boton de sincronizar
                     if let err = viewModel.errorMessage {
                         Text(err).foregroundStyle(.red).font(.caption)
                     }
@@ -37,30 +36,37 @@ struct DashboardView: View {
         }
     }
 
-    private var healthKitPrompt: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "heart.text.square.fill")
-                .font(.system(size: 48))
-                .foregroundStyle(.red.gradient)
-            Text("Conecta Apple Health")
-                .font(.headline)
-            Text("Para que tu agente sepa tus pasos, FC, sueño y entrenamientos.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            Button {
-                Task { await viewModel.requestHealthKit() }
-            } label: {
-                Text("Conectar")
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 10)
-                    .background(.red.gradient, in: Capsule())
-                    .foregroundStyle(.white)
+    // MARK: - Sub-views
+
+    private var headerCard: some View {
+        let target = auth.profile?.dailyKcalTarget ?? 2000
+        let consumed = Int(viewModel.todaysKcal)
+        let remaining = max(target - consumed, 0)
+        let progress = min(Double(consumed) / Double(target), 1.0)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading) {
+                    Text("Hola\(auth.profile?.fullName.map { ", \($0)" } ?? "")")
+                        .font(.title2).bold()
+                    Text("Hoy llevas \(consumed) kcal de \(target)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                VStack(alignment: .trailing) {
+                    Text("\(remaining)")
+                        .font(.system(size: 36, weight: .bold))
+                        .foregroundStyle(remaining == 0 ? .red : .green)
+                    Text("kcal restantes")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            ProgressView(value: progress)
+                .tint(progress >= 1.0 ? .red : .green)
         }
         .padding()
-        .frame(maxWidth: .infinity)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
     }
 
     private var summaryCards: some View {
@@ -68,38 +74,80 @@ struct DashboardView: View {
             metricCard(
                 title: "Pasos",
                 value: viewModel.steps.map { "\(Int($0))" } ?? "—",
+                subtitle: viewModel.steps.map { "\(Int($0 / 1000))k" } ?? "—",
                 icon: "figure.walk",
                 color: .green
             )
             metricCard(
                 title: "Calorías activas",
-                value: viewModel.activeEnergy.map { "\(Int($0)) kcal" } ?? "—",
+                value: viewModel.activeEnergy.map { "\(Int($0))" } ?? "—",
+                subtitle: "kcal quemadas",
                 icon: "flame.fill",
                 color: .orange
             )
             metricCard(
                 title: "FC reposo",
-                value: viewModel.restingHR.map { "\(Int($0)) lpm" } ?? "—",
+                value: viewModel.restingHR.map { "\(Int($0))" } ?? "—",
+                subtitle: "lpm",
                 icon: "heart.fill",
                 color: .red
             )
             metricCard(
                 title: "Sueño",
-                value: viewModel.sleepMinutes.map { "\(Int($0 / 60))h \($0.truncatingRemainder(dividingBy: 60).description.prefix(2))m" } ?? "—",
+                value: viewModel.sleepHours.map { formatHours($0) } ?? "—",
+                subtitle: "horas",
                 icon: "bed.double.fill",
-                color: .blue
+                color: .indigo
             )
         }
     }
 
-    private func metricCard(title: String, value: String, icon: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: icon)
-                .font(.title2)
-                .foregroundStyle(color)
+    private var weeklyChart: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "chart.bar.fill")
+                    .foregroundStyle(.blue)
+                Text("Pasos esta semana")
+                    .font(.headline)
+                Spacer()
+            }
+            // Bar chart simple con 7 barras
+            HStack(alignment: .bottom, spacing: 6) {
+                ForEach(0..<7, id: \.self) { i in
+                    let value = viewModel.weeklySteps[i]
+                    let maxValue = viewModel.weeklySteps.max() ?? 1
+                    VStack(spacing: 4) {
+                        Spacer()
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(value > 0 ? Color.blue : Color(.tertiarySystemBackground))
+                            .frame(height: maxValue > 0 ? max(CGFloat(value) / CGFloat(maxValue) * 80, 4) : 4)
+                        Text(weekdayLabel(i))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .frame(height: 110)
+        }
+        .padding()
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func metricCard(title: String, value: String, subtitle: String, icon: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundStyle(color)
+                Spacer()
+            }
             Text(value)
                 .font(.title2)
                 .bold()
+            Text(subtitle)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -108,86 +156,130 @@ struct DashboardView: View {
         .padding()
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
     }
+
+    private func formatHours(_ hours: Double) -> String {
+        let h = Int(hours)
+        let m = Int((hours - Double(h)) * 60)
+        return "\(h)h \(m)m"
+    }
+
+    private func weekdayLabel(_ index: Int) -> String {
+        let labels = ["L", "M", "X", "J", "V", "S", "D"]
+        return labels[index]
+    }
 }
 
 @MainActor
 final class DashboardViewModel: ObservableObject {
-    @Published var hasAuthorizedHealthKit = false
     @Published var steps: Double?
     @Published var activeEnergy: Double?
     @Published var restingHR: Double?
-    @Published var sleepMinutes: Double?
+    @Published var sleepHours: Double?
+    @Published var weeklySteps: [Int] = Array(repeating: 0, count: 7)
+    @Published var todaysKcal: Double = 0
+    @Published var hasAuthorizedHealthKit = false
     @Published var isSyncing = false
     @Published var errorMessage: String?
 
     func loadInitial() async {
-        await HealthKitManager.shared.syncToBackend(days: 1)
-        await loadTodaySummary()
+        // Sincronizar HealthKit -> health_metrics
+        await HealthKitManager.shared.syncToBackend(days: 7)
+        await loadMetrics()
+        await loadTodaysKcal()
     }
 
     func refresh() async {
-        await HealthKitManager.shared.syncToBackend(days: 1)
-        await loadTodaySummary()
+        await loadInitial()
     }
 
-    func requestHealthKit() async {
-        do {
-            try await HealthKitManager.shared.requestAuthorization()
-            hasAuthorizedHealthKit = true
-            await loadInitial()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func loadTodaySummary() async {
+    private func loadMetrics() async {
         do {
             let supabase = SupabaseService.shared.client
-            struct Summary: Decodable {
-                let date: String
-                let kcal: Double?
-                let protein_g: Double?
-                let carbs_g: Double?
-                let fat_g: Double?
-                let meal_count: Int?
-            }
-            let today = ISO8601DateFormatter().string(from: Date()).prefix(10)
-            let _: Summary = try await supabase
-                .rpc("get_daily_summary", params: ["p_date": String(today)])
-                .execute()
-                .value
-            // Por ahora estos campos son de comidas, no de HK
-            // En fase 2 cargamos también health_metrics
-        } catch {
-            // Silencioso si falla
-        }
+            let today = Calendar.current.startOfDay(for: Date())
+            let weekAgo = Calendar.current.date(byAdding: .day, value: -6, to: today) ?? today
 
-        // Cargar health_metrics para los 4 cards
-        do {
-            let supabase = SupabaseService.shared.client
-            let start = Calendar.current.startOfDay(for: Date()).ISO8601Format()
             struct Metric: Decodable {
                 let type: String
                 let value: Double
+                let recordedAt: String
+                enum CodingKeys: String, CodingKey {
+                    case type, value
+                    case recordedAt = "recorded_at"
+                }
             }
+
+            // Cargar metricas de los ultimos 7 dias
             let metrics: [Metric] = try await supabase
                 .from("health_metrics")
-                .select("type,value")
-                .gte("recorded_at", value: start)
+                .select("type,value,recorded_at")
+                .gte("recorded_at", value: weekAgo.ISO8601Format())
                 .execute()
                 .value
 
-            // Sumar por tipo
-            var totals: [String: Double] = [:]
+            let calendar = Calendar.current
+            let now = Date()
+
+            // Agrupar por dia (ultimos 7)
+            var stepsByDay: [Int: Double] = [:]
+            var energyByDay: [Int: Double] = [:]
+
             for m in metrics {
-                totals[m.type, default: 0] += m.value
+                // Parsear fecha
+                let f = ISO8601DateFormatter()
+                f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                let date = f.date(from: m.recordedAt) ?? f.date(from: String(m.recordedAt.prefix(19)) + "Z") ?? now
+                let daysAgo = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: today).day ?? 0
+                let idx = 6 - min(max(daysAgo, 0), 6)  // 0 = hace 6 dias, 6 = hoy
+                if m.type.contains("step") {
+                    stepsByDay[idx, default: 0] += m.value
+                } else if m.type.contains("activeEnergy") {
+                    energyByDay[idx, default: 0] += m.value
+                }
             }
-            self.steps = totals["steps"] ?? totals["stepCount"]
-            self.activeEnergy = totals["activeEnergyBurned"] ?? totals["active_energy"]
-            self.restingHR = metrics.first(where: { $0.type.contains("restingHeartRate") })?.value
-            self.sleepMinutes = totals["sleep_minutes"] ?? totals["sleepMinutes"]
+
+            // Calcular valores del dia (idx = 6)
+            self.steps = stepsByDay[6]
+            self.activeEnergy = energyByDay[6]
+
+            // Llenar weeklySteps array
+            self.weeklySteps = (0..<7).map { Int(stepsByDay[$0] ?? 0) }
+
+            // FC reposo (ultimo valor del dia)
+            self.restingHR = metrics
+                .filter { $0.type.contains("restingHeartRate") }
+                .filter { _ in
+                    let f = ISO8601DateFormatter()
+                    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                    let date = f.date(from: $0.recordedAt) ?? now
+                    return calendar.isDate(date, inSameDayAs: now)
+                }
+                .first?.value
+
+            // Sueño (suma de ayer noche o esta madrugada)
+            self.sleepHours = metrics
+                .filter { $0.type.contains("sleep") }
+                .reduce(0.0) { $0 + $1.value } / 3600.0  // minutos a horas
         } catch {
-            // ok, sin datos aún
+            errorMessage = "Error cargando metricas: \(error.localizedDescription)"
+        }
+    }
+
+    private func loadTodaysKcal() async {
+        do {
+            let supabase = SupabaseService.shared.client
+            let today = Calendar.current.startOfDay(for: Date()).ISO8601Format()
+            struct Meal: Decodable {
+                let kcal: Double?
+            }
+            let meals: [Meal] = try await supabase
+                .from("meals")
+                .select("kcal")
+                .gte("consumed_at", value: today)
+                .execute()
+                .value
+            self.todaysKcal = meals.reduce(0) { $0 + ($1.kcal ?? 0) }
+        } catch {
+            // Silencioso
         }
     }
 }

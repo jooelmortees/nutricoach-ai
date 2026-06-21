@@ -28,6 +28,7 @@ struct Profile: Codable, Identifiable {
     var budgetEurPerWeek: Double?
     var locale: String?
     var timezone: String?
+    var onboardedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -53,6 +54,7 @@ struct Profile: Codable, Identifiable {
         case budgetEurPerWeek = "budget_eur_per_week"
         case locale
         case timezone
+        case onboardedAt = "onboarded_at"
     }
 }
 

@@ -38,7 +38,11 @@ struct RootView: View {
             case .signedOut:
                 AuthView()
             case .signedIn:
-                MainTabView()
+                if let profile = auth.profile, profile.onboardedAt == nil {
+                    OnboardingView()
+                } else {
+                    MainTabView()
+                }
             }
         }
     }
