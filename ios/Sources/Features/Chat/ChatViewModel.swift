@@ -183,6 +183,68 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// Guarda una comida (parseada del JSON de M3) en la tabla `meals` del usuario.
+    /// Usado por el boton "Guardar en mi dia" que aparece cuando M3 devuelve
+    /// macros en formato JSON.
+    func saveMeal(_ meal: PendingMeal) async {
+        guard let userId = currentConversationId ?? (try? await SupabaseService.shared.client.auth.session.user.id.uuidString) else {
+            errorMessage = "No se pudo identificar al usuario"
+            return
+        }
+        // Si tenemos currentConversationId, el user esta autenticado
+        let actualUserId: String
+        if let _ = currentConversationId {
+            // Necesitamos el user ID del cliente Supabase
+            do {
+                actualUserId = try await SupabaseService.shared.client.auth.session.user.id.uuidString
+            } catch {
+                errorMessage = "Error de sesión"
+                return
+            }
+        } else {
+            actualUserId = userId
+        }
+        _ = actualUserId  // suppress unused warning, used in struct
+
+        // Insertar en meals via Supabase
+        struct InsertPayload: Encodable {
+            let user_id: String
+            let description: String
+            let meal_type: String?
+            let kcal: Double?
+            let protein_g: Double?
+            let carbs_g: Double?
+            let fat_g: Double?
+            let confidence: Double?
+            let source: String
+        }
+        let payload = InsertPayload(
+            user_id: actualUserId,
+            description: meal.description,
+            meal_type: meal.meal_type,
+            kcal: meal.kcal,
+            protein_g: meal.protein_g,
+            carbs_g: meal.carbs_g,
+            fat_g: meal.fat_g,
+            confidence: meal.confidence,
+            source: "text"
+        )
+
+        do {
+            try await SupabaseService.shared.client
+                .from("meals")
+                .insert(payload)
+                .execute()
+            // Mensaje de confirmacion en el chat
+            messages.append(ChatMessage(
+                role: .assistant,
+                content: "✅ Guardado: **\(meal.description)** en tu registro de comidas del día."
+            ))
+        } catch {
+            errorMessage = "Error guardando comida: \(error.localizedDescription)"
+        }
+    }
+
     private func formatMealSummary(kcal: Double?, protein: Double?, carbs: Double?, fat: Double?) -> String {
         var parts: [String] = []
         if let kcal = kcal { parts.append("\(Int(kcal)) kcal") }

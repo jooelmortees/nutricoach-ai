@@ -60,9 +60,13 @@ struct ChatView: View {
                         }
                     }
                     ForEach(viewModel.messages) { msg in
-                        MessageRow(message: msg) { url in
-                            fullscreenImageURL = url
-                        }
+                        MessageRow(
+                            message: msg,
+                            onImageTap: { url in fullscreenImageURL = url },
+                            onSaveMeal: { meal in
+                                Task { await viewModel.saveMeal(meal) }
+                            }
+                        )
                         .id(msg.id)
                     }
                 }

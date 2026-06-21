@@ -18,6 +18,19 @@ struct SettingsView: View {
                         LabeledContent("Peso", value: profile.weightKg.map { "\($0) kg" } ?? "—")
                         LabeledContent("Altura", value: profile.heightCm.map { "\(Int($0)) cm" } ?? "—")
                         LabeledContent("Contexto", value: profile.householdContext ?? "—")
+                        NavigationLink {
+                            ProfileSetupView()
+                        } label: {
+                            Label("Editar perfil completo", systemImage: "pencil")
+                        }
+                    }
+                } else {
+                    Section("Perfil") {
+                        NavigationLink {
+                            ProfileSetupView()
+                        } label: {
+                            Label("Configurar mi perfil", systemImage: "person.crop.circle.badge.plus")
+                        }
                     }
                 }
 
