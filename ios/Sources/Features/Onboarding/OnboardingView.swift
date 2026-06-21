@@ -145,7 +145,7 @@ struct OnboardingView: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 24)
                 .padding(.vertical, 12)
-                .background(viewModel.healthKitGranted ? Color.gray : Color.red.gradient, in: Capsule())
+                .background(viewModel.healthKitGranted ? Color.gray : Color.red, in: Capsule())
             }
             .disabled(viewModel.healthKitGranted)
             Spacer()
