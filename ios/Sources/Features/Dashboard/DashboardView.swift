@@ -247,10 +247,10 @@ final class DashboardViewModel: ObservableObject {
             // FC reposo (ultimo valor del dia)
             self.restingHR = metrics
                 .filter { $0.type.contains("restingHeartRate") }
-                .filter { _ in
+                .filter { metric in
                     let f = ISO8601DateFormatter()
                     f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                    let date = f.date(from: $0.recordedAt) ?? now
+                    let date = f.date(from: metric.recordedAt) ?? now
                     return calendar.isDate(date, inSameDayAs: now)
                 }
                 .first?.value
