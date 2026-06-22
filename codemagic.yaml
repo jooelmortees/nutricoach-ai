@@ -50,11 +50,20 @@ workflows:
             -scheme NutriCoach
       - name: Set up code signing (keychain + cert + profile)
         script: |
+          # Debug: verificar env vars
+          echo "=== Env vars de signing ==="
+          echo "CM_CERTIFICATE length: ${#CM_CERTIFICATE}"
+          echo "CM_CERTIFICATE_PASSWORD length: ${#CM_CERTIFICATE_PASSWORD}"
+          echo "CERT_PASSWORD length: ${#CERT_PASSWORD}"
+          echo "CM_PROVISIONING_PROFILE length: ${#CM_PROVISIONING_PROFILE}"
+          echo ""
+
           # Crea keychain temporal
           keychain initialize
           # Decodifica cert (base64) y lo anade al keychain
           echo "=== Anadiendo cert al keychain ==="
           echo $CM_CERTIFICATE | base64 --decode > /tmp/cert.p12
+          ls -la /tmp/cert.p12
           keychain add-certificates \
             --certificate /tmp/cert.p12 \
             --certificate-password $CERT_PASSWORD
@@ -66,6 +75,7 @@ workflows:
           PROFILE_PATH="$(mktemp "$PROFILES_HOME"/$(uuidgen).mobileprovision)"
           echo $CM_PROVISIONING_PROFILE | base64 --decode > "$PROFILE_PATH"
           echo "Profile: $PROFILE_PATH"
+          ls -la "$PROFILE_PATH"
           # Verificacion rapida del profile
           security cms -D -i "$PROFILE_PATH" 2>&1 | head -5
       - name: Build (Debug, signed)
@@ -84,7 +94,6 @@ workflows:
             -derivedDataPath build/DerivedData \
             -skipPackagePluginValidation \
             -skipMacroValidation \
-            CODE_SIGN_ENTITLEMENTS=ios/Sources/Resources/NutriCoach.entitlements \
             ENABLE_PREVIEWS=NO \
             SWIFT_ENABLE_PREVIEWS=NO \
             ENABLE_DEBUG_DYLIB=NO \
