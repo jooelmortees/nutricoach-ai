@@ -54,7 +54,6 @@ workflows:
           echo "=== Env vars de signing ==="
           echo "CM_CERTIFICATE length: ${#CM_CERTIFICATE}"
           echo "CM_CERTIFICATE_PASSWORD length: ${#CM_CERTIFICATE_PASSWORD}"
-          echo "CERT_PASSWORD length: ${#CERT_PASSWORD}"
           echo "CM_PROVISIONING_PROFILE length: ${#CM_PROVISIONING_PROFILE}"
           echo ""
 
@@ -66,7 +65,7 @@ workflows:
           ls -la /tmp/cert.p12
           keychain add-certificates \
             --certificate /tmp/cert.p12 \
-            --certificate-password $CERT_PASSWORD
+            --certificate-password $CM_CERTIFICATE_PASSWORD
           # Decodifica profile y lo guarda en el path que xcodebuild espera
           echo ""
           echo "=== Guardando provisioning profile ==="
