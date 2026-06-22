@@ -3,14 +3,24 @@
 // ============================================================
 
 import SwiftUI
+import HealthKit
 
 struct SettingsView: View {
     @EnvironmentObject var auth: AuthManager
+    @ObservedObject private var healthKit = HealthKitManager.shared
     @AppStorage("app.theme") private var themePreference: String = "system"
     @AppStorage("app.notificationsEnabled") private var notificationsEnabled: Bool = true
     @AppStorage("app.hapticsEnabled") private var hapticsEnabled: Bool = true
     @State private var showSignOutConfirm: Bool = false
     @State private var showClearAllConfirm: Bool = false
+    @State private var lastSyncDate: Date? = nil
+    @State private var isConnectingHealthKit: Bool = false
+    @State private var healthKitError: String? = nil
+
+    // Clave compartida con HealthKitManager para leer el timestamp de ultima sync.
+    // La fuente de verdad es `HealthKitManager.lastSyncKey` (privado al modulo);
+    // usamos el mismo literal para evitar exponer API publica.
+    private let lastSyncKey = "hk_last_sync_at"
 
     var body: some View {
         NavigationStack {
@@ -73,10 +83,81 @@ struct SettingsView: View {
 
                 // MARK: - Salud
                 Section("Salud") {
-                    Button {
-                        Task { await HealthKitManager.shared.syncToBackend(days: 30) }
-                    } label: {
-                        Label("Sincronizar HealthKit ahora", systemImage: "arrow.triangle.2.circlepath")
+                    HStack {
+                        Image(systemName: healthKit.isAuthorized ? "heart.fill" : "heart.slash")
+                            .foregroundStyle(healthKit.isAuthorized ? .red : .secondary)
+                        Text(healthKit.isAuthorized ? "Apple Health conectado" : "Apple Health no conectado")
+                            .font(.subheadline)
+                        Spacer()
+                        if let last = lastSyncDate {
+                            Text("Sync \(timeAgo(last))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if healthKit.isAuthorized {
+                        Button {
+                            Task {
+                                isConnectingHealthKit = true
+                                await HealthKitManager.shared.syncToBackend(days: 30, force: true)
+                                isConnectingHealthKit = false
+                                refreshHealthKit()
+                            }
+                        } label: {
+                            HStack {
+                                if isConnectingHealthKit || healthKit.isSyncing {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                }
+                                Text("Sincronizar HealthKit ahora")
+                            }
+                        }
+                        .disabled(isConnectingHealthKit || healthKit.isSyncing)
+                    } else {
+                        Button {
+                            Task {
+                                isConnectingHealthKit = true
+                                healthKitError = nil
+                                do {
+                                    try await HealthKitManager.shared.requestAuthorization()
+                                    if healthKit.isAuthorized {
+                                        await HealthKitManager.shared.syncToBackend(days: 7, force: true)
+                                        refreshHealthKit()
+                                    } else {
+                                        healthKitError = "Has denegado el acceso. Activalo en Ajustes de iOS > Salud > Datos y acceso > Apps."
+                                    }
+                                } catch {
+                                    healthKitError = "No se pudo conectar: \(error.localizedDescription)"
+                                }
+                                isConnectingHealthKit = false
+                            }
+                        } label: {
+                            HStack {
+                                if isConnectingHealthKit {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Image(systemName: "heart.fill")
+                                }
+                                Text("Conectar Apple Health")
+                            }
+                        }
+                        .disabled(isConnectingHealthKit)
+
+                        Button {
+                            if let url = URL(string: UIApplication.openSettingsURLString) {
+                                UIApplication.shared.open(url)
+                            }
+                        } label: {
+                            Label("Abrir Ajustes de iOS", systemImage: "gear")
+                        }
+                    }
+
+                    if let err = healthKitError {
+                        Text(err).font(.caption).foregroundStyle(.red)
+                    }
+                    if let last = healthKit.lastError, healthKit.isAuthorized {
+                        Text(last).font(.caption).foregroundStyle(.orange)
                     }
                 }
 
@@ -123,6 +204,13 @@ struct SettingsView: View {
             }
             .navigationTitle("Ajustes")
             .preferredColorScheme(colorScheme)
+            .task {
+                refreshHealthKit()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+                // El usuario pudo haber cambiado permisos en Ajustes de iOS
+                refreshHealthKit()
+            }
             .confirmationDialog("¿Cerrar sesión?", isPresented: $showSignOutConfirm) {
                 Button("Cerrar sesión", role: .destructive) {
                     Task { await auth.signOut() }
@@ -154,5 +242,18 @@ struct SettingsView: View {
         case "gain": return "Ganar peso/músculo"
         default: return "Mantener"
         }
+    }
+
+    private func refreshHealthKit() {
+        healthKitAuthorized = HealthKitManager.shared.refreshAuthorizationStatus()
+        lastSyncDate = UserDefaults.standard.object(forKey: lastSyncKey) as? Date
+    }
+
+    private func timeAgo(_ date: Date) -> String {
+        let elapsed = Date().timeIntervalSince(date)
+        if elapsed < 60 { return "ahora" }
+        if elapsed < 3600 { return "hace \(Int(elapsed/60))m" }
+        if elapsed < 86400 { return "hace \(Int(elapsed/3600))h" }
+        return "hace \(Int(elapsed/86400))d"
     }
 }

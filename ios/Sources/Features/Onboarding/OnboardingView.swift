@@ -129,7 +129,7 @@ struct OnboardingView: View {
             Text("Conecta Apple Health")
                 .font(.title).bold()
                 .multilineTextAlignment(.center)
-            Text("Conecto automáticamente con Apple Health para leer tus pasos, frecuencia cardíaca, sueño y entrenamientos. Es opcional pero muy útil para personalizar tus recomendaciones.")
+            Text("Conecto automaticamente con Apple Health para leer tus pasos, frecuencia cardiaca, sueno y entrenamientos. Es opcional pero muy util para personalizar tus recomendaciones.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -138,8 +138,12 @@ struct OnboardingView: View {
                 Task { await viewModel.requestHealthKit() }
             } label: {
                 HStack {
-                    Image(systemName: viewModel.healthKitGranted ? "checkmark.circle.fill" : "heart.fill")
-                    Text(viewModel.healthKitGranted ? "Conectado" : "Conectar Apple Health")
+                    if viewModel.isConnectingHealthKit {
+                        ProgressView().tint(.white)
+                    } else {
+                        Image(systemName: viewModel.healthKitGranted ? "checkmark.circle.fill" : "heart.fill")
+                        Text(viewModel.healthKitGranted ? "Conectado" : "Conectar Apple Health")
+                    }
                 }
                 .font(.headline)
                 .foregroundStyle(.white)
@@ -147,8 +151,24 @@ struct OnboardingView: View {
                 .padding(.vertical, 12)
                 .background(viewModel.healthKitGranted ? Color.gray : Color.red, in: Capsule())
             }
-            .disabled(viewModel.healthKitGranted)
+            .disabled(viewModel.healthKitGranted || viewModel.isConnectingHealthKit)
+
+            if viewModel.healthKitGranted {
+                if HealthKitManager.shared.isSyncing {
+                    Text("Leyendo datos de Apple Health...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if let msg = viewModel.errorMessage {
+                Text(msg)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
             Spacer()
+        }
+        .onAppear {
+            viewModel.refreshHealthKitStatus()
         }
     }
 
@@ -332,8 +352,21 @@ final class OnboardingViewModel: ObservableObject {
     @Published var weightString: String = ""
     @Published var goal: String = ""
     @Published var healthKitGranted: Bool = false
+    @Published var isConnectingHealthKit: Bool = false
     @Published var isSaving: Bool = false
     @Published var errorMessage: String?
+
+    init() {
+        // Reflejar estado real al entrar al view model
+        refreshHealthKitStatus()
+    }
+
+    /// Comprueba el estado REAL de autorizacion de HealthKit (no el prompt).
+    /// requestAuthorization SIEMPRE devuelve OK aunque el usuario deniegue,
+    /// asi que hay que mirar authorizationStatus(for:) tipo a tipo.
+    func refreshHealthKitStatus() {
+        healthKitGranted = HealthKitManager.shared.refreshAuthorizationStatus()
+    }
 
     /// Mifflin-St Jeor para calcular TMB (Tasa Metabolica Basal)
     /// Hombres: 10*peso + 6.25*altura - 5*edad + 5
@@ -359,9 +392,21 @@ final class OnboardingViewModel: ObservableObject {
     }
 
     func requestHealthKit() async {
+        errorMessage = nil
+        isConnectingHealthKit = true
+        defer { isConnectingHealthKit = false }
         do {
             try await HealthKitManager.shared.requestAuthorization()
-            healthKitGranted = true
+            // Tras pedir, refrescar estado real
+            refreshHealthKitStatus()
+            if healthKitGranted {
+                // Sync inicial inmediato: 7 dias hacia atras.
+                // force=true para saltarse el throttling de lastSyncAt
+                // (es la primera vez que conectamos).
+                await HealthKitManager.shared.syncToBackend(days: 7, force: true)
+            } else {
+                errorMessage = "Has denegado el acceso a Apple Health. Puedes activarlo mas tarde en Ajustes de iOS > Salud > Datos y acceso > Apps."
+            }
         } catch {
             // Si falla, no es bloqueante - el user puede continuar sin HealthKit
             healthKitGranted = false

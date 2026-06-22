@@ -8,20 +8,36 @@ import HealthKit
 struct DashboardView: View {
     @EnvironmentObject var auth: AuthManager
     @StateObject private var viewModel = DashboardViewModel()
+    @ObservedObject private var healthKit = HealthKitManager.shared
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
+                    // Banner si HealthKit no esta conectado
+                    if !healthKit.isAuthorized {
+                        healthKitBanner
+                    }
+
                     // Header: saludo + kcal restantes
                     headerCard
                     // 4 metricas principales
                     summaryCards
                     // Grafico de pasos (ultimos 7 dias)
                     weeklyChart
-                    // Boton de sincronizar
+
+                    if healthKit.isSyncing {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Sincronizando Apple Health...").font(.caption).foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                    }
+
                     if let err = viewModel.errorMessage {
                         Text(err).foregroundStyle(.red).font(.caption)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .padding()
@@ -34,6 +50,32 @@ struct DashboardView: View {
                 await viewModel.loadInitial()
             }
         }
+    }
+
+    private var healthKitBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "heart.slash")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Apple Health no conectado").font(.subheadline).bold()
+                Text("Activa el acceso en Ajustes de iOS para ver pasos, FC y sueno.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Ir a Ajustes") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            .font(.caption).bold()
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12).stroke(Color.orange.opacity(0.3), lineWidth: 1)
+        )
     }
 
     // MARK: - Sub-views
@@ -178,12 +220,18 @@ final class DashboardViewModel: ObservableObject {
     @Published var weeklySteps: [Int] = Array(repeating: 0, count: 7)
     @Published var todaysKcal: Double = 0
     @Published var hasAuthorizedHealthKit = false
-    @Published var isSyncing = false
+    @Published var isSyncing: Bool = false
     @Published var errorMessage: String?
 
     func loadInitial() async {
-        // Sincronizar HealthKit -> health_metrics
-        await HealthKitManager.shared.syncToBackend(days: 7)
+        // Refrescar estado REAL de autorizacion (puede haber cambiado desde onboarding)
+        let authorized = HealthKitManager.shared.refreshAuthorizationStatus()
+        hasAuthorizedHealthKit = authorized
+
+        // Solo sincronizar si hay autorizacion REAL
+        if authorized {
+            await HealthKitManager.shared.syncToBackend(days: 7)
+        }
         await loadMetrics()
         await loadTodaysKcal()
     }

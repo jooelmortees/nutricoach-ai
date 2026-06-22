@@ -11,8 +11,18 @@ final class HealthKitManager: ObservableObject {
 
     @Published var isAuthorized: Bool = false
     @Published var lastError: String?
+    @Published var isSyncing: Bool = false
 
     private let store = HKHealthStore()
+
+    /// Clave de UserDefaults para evitar sincronizar mas de una vez por ventana
+    private static let lastSyncKey = "hk_last_sync_at"
+
+    /// Tipos clave cuya autorizacion comprobamos para considerar "conectado".
+    /// Si ninguno esta autorizado, la app no intentara leer HK.
+    private static let keyTypes: [HKQuantityTypeIdentifier] = [
+        .stepCount, .heartRate, .restingHeartRate, .activeEnergyBurned,
+    ]
 
     /// Tipos que leemos del usuario
     private var readTypes: Set<HKObjectType> {
@@ -69,18 +79,74 @@ final class HealthKitManager: ObservableObject {
             throw HealthKitError.notAvailable
         }
         try await store.requestAuthorization(toShare: writeTypes, read: readTypes)
-        isAuthorized = true
+        // NO marcamos isAuthorized=true ciegamente: comprobamos el estado real
+        // por tipo. requestAuthorization SIEMPRE resuelve OK aunque el usuario
+        // haya denegado todo (es un prompt, no una promesa).
+        isAuthorized = Self.checkAuthorizationStatus(store: store)
+    }
+
+    /// Comprueba el estado REAL de autorizacion para los tipos clave.
+    /// Devuelve true solo si TODOS los tipos clave estan en `.sharingAuthorized`.
+    /// Un tipo en `.notDetermined` significa que el usuario aun no ha visto el prompt
+    /// o lo ha denegado sin decidir.
+    static func checkAuthorizationStatus(store: HKHealthStore) -> Bool {
+        for id in keyTypes {
+            guard let type = HKQuantityType.quantityType(forIdentifier: id) else { continue }
+            let status = store.authorizationStatus(for: type)
+            guard status == .sharingAuthorized else { return false }
+        }
+        return true
+    }
+
+    /// Convenience: usa el store interno del singleton.
+    func refreshAuthorizationStatus() -> Bool {
+        let real = Self.checkAuthorizationStatus(store: store)
+        isAuthorized = real
+        return real
     }
 
     /// Sincroniza los últimos N días de HealthKit a Supabase vía Edge Function.
     /// Captura errores internamente y los publica en `lastError` para que las
     /// vistas no tengan que propagar `try` por encima.
-    func syncToBackend(days: Int = 7) async {
+    ///
+    /// - Parameters:
+    ///   - days: ventana hacia atras a sincronizar.
+    ///   - force: si true, ignora `lastSyncAt` y sincroniza siempre. Usar en
+    ///     onboarding (primera conexion) y en el boton manual de Settings.
+    func syncToBackend(days: Int = 7, force: Bool = false) async {
+        // Si ya hay una sincronizacion en curso, no lanzar otra en paralelo
+        if isSyncing { return }
+
+        // Si no hay autorizacion real, no intentamos leer HK
+        guard isAuthorized else {
+            AppLogger.warning("HealthKit sync omitido: sin autorizacion")
+            return
+        }
+
+        // Throttling: si la ultima sync fue hace <1h y no es forzada, saltar
+        if !force, let last = UserDefaults.standard.object(forKey: Self.lastSyncKey) as? Date {
+            let elapsed = Date().timeIntervalSince(last)
+            if elapsed < 3600 {
+                AppLogger.info("HealthKit sync omitido: ultima sync hace \(Int(elapsed))s")
+                return
+            }
+        }
+
+        isSyncing = true
+        defer { isSyncing = false }
+
         do {
             let end = Date()
             let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
 
             let metrics = try await collectMetrics(from: start, to: end)
+
+            guard !metrics.isEmpty else {
+                AppLogger.info("HealthKit sync: 0 muestras en ventana")
+                UserDefaults.standard.set(Date(), forKey: Self.lastSyncKey)
+                lastError = nil
+                return
+            }
 
             // Enviar al backend
             let url = Config.hkSyncURL
@@ -96,7 +162,8 @@ final class HealthKitManager: ObservableObject {
                 let body = String(data: data, encoding: .utf8) ?? "?"
                 throw HealthKitError.syncFailed(body)
             }
-            AppLogger.info("HealthKit sync OK: \(metrics.count) métricas")
+            AppLogger.info("HealthKit sync OK: \(metrics.count) metricas")
+            UserDefaults.standard.set(Date(), forKey: Self.lastSyncKey)
             lastError = nil
         } catch {
             lastError = error.localizedDescription
