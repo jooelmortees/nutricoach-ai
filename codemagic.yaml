@@ -129,6 +129,37 @@ workflows:
           echo "=== Info.plist DESPUES de inyectar (solo SUPABASE_) ==="
           /usr/libexec/PlistBuddy -c "Print :SUPABASE_URL" "$PLIST" 2>&1 | head -3
           /usr/libexec/PlistBuddy -c "Print :SUPABASE_ANON_KEY" "$PLIST" 2>&1 | head -3
+      - name: Re-sign with entitlements (ad-hoc)
+        script: |
+          APP_PATH=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: no se encontro NutriCoach.app"
+            exit 1
+          fi
+          ENTITLEMENTS="ios/Sources/Resources/NutriCoach.entitlements"
+          if [ ! -f "$ENTITLEMENTS" ]; then
+            echo "ERROR: no existe $ENTITLEMENTS"
+            exit 1
+          fi
+          echo "=== Entitlements a inyectar ==="
+          /usr/libexec/PlistBuddy -c "Print" "$ENTITLEMENTS"
+          echo ""
+          # codesign --force --sign - : firma ad-hoc (sin cert real)
+          # --entitlements : inyecta los entitlements en el binario
+          # CRITICO: xcodebuild con CODE_SIGNING_ALLOWED=NO no inyecta los
+          # entitlements, asi que el binario llega sin com.apple.developer.healthkit
+          # y iOS lo rechaza en runtime con 'Missing entitlement'.
+          # Sideloadly/AltStore normalmente respeta los entitlements del binario
+          # al re-firmar con su cert, asi que los conservamos.
+          echo "=== Re-firmando con codesign ad-hoc + entitlements ==="
+          codesign --force --sign - --entitlements "$ENTITLEMENTS" --timestamp=none --preserve-metadata=identifier,flags "$APP_PATH" 2>&1
+          if [ $? -ne 0 ]; then
+            echo "ERROR: codesign fallo"
+            exit 1
+          fi
+          echo ""
+          echo "=== Verificacion: entitlements del binario ==="
+          codesign -d --entitlements :- "$APP_PATH" 2>&1 | head -40
       - name: Create IPA (no signing)
         script: |
           APP_PATH=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)

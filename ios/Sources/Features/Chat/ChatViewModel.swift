@@ -219,6 +219,14 @@ final class ChatViewModel: ObservableObject {
     /// Guarda una comida (parseada del JSON de M3) en la tabla `meals` del usuario.
     /// Usado por el boton "Guardar en mi dia" que aparece cuando M3 devuelve
     /// macros en formato JSON.
+    ///
+    /// Mapeo entre `PendingMeal` (lo que viene del JSON de M3) y la tabla `meals`:
+    /// - `description`  -> `name`  (la tabla no tiene `description`)
+    /// - `kcal`         -> `total_kcal`
+    /// - `protein_g`    -> `total_protein_g`
+    /// - `carbs_g`      -> `total_carbs_g`
+    /// - `fat_g`        -> `total_fat_g`
+    /// - `confidence`   -> `notes` (text, guarda el score)
     func saveMeal(_ meal: PendingMeal) async {
         // 1. Obtener userId del cliente Supabase (sesion activa)
         let userId: String
@@ -229,28 +237,37 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        // 2. Insertar en meals
+        // 2. Insertar en meals con los nombres REALES de columnas
         struct InsertPayload: Encodable {
             let user_id: String
-            let description: String
+            let name: String
             let meal_type: String?
-            let kcal: Double?
-            let protein_g: Double?
-            let carbs_g: Double?
-            let fat_g: Double?
-            let confidence: Double?
+            let total_kcal: Double?
+            let total_protein_g: Double?
+            let total_carbs_g: Double?
+            let total_fat_g: Double?
             let source: String
+            let notes: String?
         }
+        // Notes guarda provenance estructurada (confidence, source) para
+        // analisis posterior. Es text simple para evitar AnyEncodable.
+        var notesParts: [String] = []
+        if let conf = meal.confidence {
+            notesParts.append("confidence=\(conf)")
+        }
+        notesParts.append("source=text")
+        let notes = notesParts.joined(separator: " ")
+
         let payload = InsertPayload(
             user_id: userId,
-            description: meal.description,
+            name: meal.description,
             meal_type: meal.meal_type,
-            kcal: meal.kcal,
-            protein_g: meal.protein_g,
-            carbs_g: meal.carbs_g,
-            fat_g: meal.fat_g,
-            confidence: meal.confidence,
-            source: "text"
+            total_kcal: meal.kcal,
+            total_protein_g: meal.protein_g,
+            total_carbs_g: meal.carbs_g,
+            total_fat_g: meal.fat_g,
+            source: "text",
+            notes: notes
         )
 
         do {
