@@ -14,6 +14,18 @@ workflows:
       cocoapods: default
       groups:
         - Supabase
+        - Certificado
+    signing:
+      override:
+        sign_style: manual
+        distribution_type: development
+        # Cert y profile subidos a Personal Account > Code signing identities
+        # con nombre "NutriCoach" (ambos). El password se inyecta via
+        # env var CERT_PASSWORD del grupo "Certificado".
+        cert_p12: NutriCoach
+        cert_password: $CERT_PASSWORD
+        provisioning_profiles:
+          - NutriCoach
     triggering:
       events:
         - push
@@ -40,14 +52,13 @@ workflows:
           xcodebuild -resolvePackageDependencies \
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach
-      - name: Build (Debug, no signing)
+      - name: Build (Debug, signed)
         script: |
           mkdir -p build
           set -o pipefail
-          # NOTA: Xcode 26 / iOS 26.4 ha deshabilitado la firma ad-hoc
-          # integrada en xcodebuild ('Ad Hoc code signing is not allowed
-          # with SDK iOS 26.4'). Por eso usamos CODE_SIGNING_ALLOWED=NO
-          # y hacemos la firma DESPUES con codesign CLI (que SI funciona).
+          # Codemagic inyecta CODE_SIGN_IDENTITY y CODE_SIGNING_REQUIRED
+          # automaticamente desde la seccion `signing` de arriba. Los entitlements
+          # del archivo .entitlements se inyectan en el binario durante el build.
           xcodebuild \
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach \
@@ -56,9 +67,7 @@ workflows:
             -derivedDataPath build/DerivedData \
             -skipPackagePluginValidation \
             -skipMacroValidation \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS=ios/Sources/Resources/NutriCoach.entitlements \
             ENABLE_PREVIEWS=NO \
             SWIFT_ENABLE_PREVIEWS=NO \
             ENABLE_DEBUG_DYLIB=NO \
@@ -67,25 +76,19 @@ workflows:
           EXIT=$?
           echo "=== BUILD EXIT CODE: $EXIT ==="
           echo ""
-          echo "=== Entitlements del binario DESPUES de xcodebuild (sin firma) ==="
+          echo "=== Entitlements del binario firmado ==="
           APP_PATH_AFTER_BUILD=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
           if [ -n "$APP_PATH_AFTER_BUILD" ]; then
             codesign -d --entitlements :- "$APP_PATH_AFTER_BUILD" 2>&1
+            echo ""
+            echo "=== Firma del binario ==="
+            codesign -dvv "$APP_PATH_AFTER_BUILD" 2>&1 | head -15
           else
             echo "(no se encontro .app)"
           fi
           echo ""
-          echo "=== Todos los errores (sin filtro, para no perder contexto) ==="
+          echo "=== Todos los errores (sin filtro) ==="
           grep -E "error:" build/xcodebuild.log | head -40 || echo "(sin errores)"
-          echo ""
-          echo "=== Contexto 50 lineas alrededor de 'failed to produce diagnostic' ==="
-          grep -n "failed to produce diagnostic" build/xcodebuild.log | head -5
-          LINE=$(grep -n "failed to produce diagnostic" build/xcodebuild.log | head -1 | cut -d: -f1)
-          if [ -n "$LINE" ]; then
-            START=$((LINE > 100 ? LINE - 100 : 1))
-            END=$((LINE + 100))
-            sed -n "${START},${END}p" build/xcodebuild.log
-          fi
           echo ""
           echo "=== Errores por archivo (resumen) ==="
           grep -E "error:" build/xcodebuild.log | grep -oE "[A-Za-z]+\.swift:[0-9]+:[0-9]+:" | sort -u
@@ -143,34 +146,18 @@ workflows:
           /usr/libexec/PlistBuddy -c "Print :SUPABASE_ANON_KEY" "$PLIST" 2>&1 | head -3
       - name: Re-sign with entitlements (ad-hoc, backup)
         script: |
+          # Con signing real ya no hace falta re-firmar. El binario sale
+          # firmado por xcodebuild con el cert y profile de Codemagic.
           APP_PATH=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
           if [ -z "$APP_PATH" ]; then
             echo "ERROR: no se encontro NutriCoach.app"
             exit 1
           fi
-          ENTITLEMENTS="ios/Sources/Resources/NutriCoach.entitlements"
-          if [ ! -f "$ENTITLEMENTS" ]; then
-            echo "ERROR: no existe $ENTITLEMENTS"
-            exit 1
-          fi
-          echo "=== Entitlements del binario ANTES de re-firmar ==="
-          codesign -d --entitlements :- "$APP_PATH" 2>&1 | head -50
+          echo "=== Verificacion final del binario firmado ==="
+          codesign -dvv "$APP_PATH" 2>&1 | head -15
           echo ""
-          # Re-firmar con ad-hoc + entitlements. Es un respaldo por si
-          # xcodebuild con --sign - no inyecto los entitlements correctamente.
-          # --preserve-metadata=identifier,flags mantiene el bundle ID y flags
-          # (importante para que iOS reconozca el binario).
-          echo "=== Re-firmando con codesign ad-hoc + entitlements (respaldo) ==="
-          codesign --force --sign - --entitlements "$ENTITLEMENTS" --preserve-metadata=identifier,flags "$APP_PATH" 2>&1
-          if [ $? -ne 0 ]; then
-            echo "WARN: codesign fallo, continuando con la firma original"
-          fi
-          echo ""
-          echo "=== Entitlements del binario DESPUES de re-firmar ==="
-          codesign -d --entitlements :- "$APP_PATH" 2>&1 | head -50
-          echo ""
-          echo "=== Firma del binario (verificacion) ==="
-          codesign -dvv "$APP_PATH" 2>&1 | head -20
+          echo "=== Entitlements finales ==="
+          codesign -d --entitlements :- "$APP_PATH" 2>&1 | head -30
       - name: Create IPA (no signing)
         script: |
           APP_PATH=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
