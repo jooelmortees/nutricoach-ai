@@ -245,7 +245,9 @@ struct SettingsView: View {
     }
 
     private func refreshHealthKit() {
-        healthKitAuthorized = HealthKitManager.shared.refreshAuthorizationStatus()
+        // Actualiza el manager (que ya esta observado por la View). No necesitamos
+        // variable local: el @ObservedObject refresca la UI automaticamente.
+        _ = HealthKitManager.shared.refreshAuthorizationStatus()
         lastSyncDate = UserDefaults.standard.object(forKey: lastSyncKey) as? Date
     }
 
