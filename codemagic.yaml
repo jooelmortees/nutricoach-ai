@@ -40,15 +40,14 @@ workflows:
           xcodebuild -resolvePackageDependencies \
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach
-      - name: Build (Debug, ad-hoc signing)
+      - name: Build (Debug, no signing)
         script: |
           mkdir -p build
           set -o pipefail
-          # Firma ad-hoc con '-' (sin cert real). xcodebuild inyecta los
-          # entitlements del archivo .entitlements automaticamente.
-          # Es la forma canonica de producir un .app firmado con entitlements
-          # sin necesidad de un cert de Apple Development. Sideloadly/AltStore
-          # pueden re-firmar encima, pero los entitlements ya estan en el binario.
+          # NOTA: Xcode 26 / iOS 26.4 ha deshabilitado la firma ad-hoc
+          # integrada en xcodebuild ('Ad Hoc code signing is not allowed
+          # with SDK iOS 26.4'). Por eso usamos CODE_SIGNING_ALLOWED=NO
+          # y hacemos la firma DESPUES con codesign CLI (que SI funciona).
           xcodebuild \
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach \
@@ -57,11 +56,9 @@ workflows:
             -derivedDataPath build/DerivedData \
             -skipPackagePluginValidation \
             -skipMacroValidation \
-            CODE_SIGN_IDENTITY=- \
-            CODE_SIGNING_REQUIRED=YES \
-            CODE_SIGNING_ALLOWED=YES \
-            CODE_SIGN_ENTITLEMENTS=ios/Sources/Resources/NutriCoach.entitlements \
-            CODE_SIGN_STYLE=Manual \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
             ENABLE_PREVIEWS=NO \
             SWIFT_ENABLE_PREVIEWS=NO \
             ENABLE_DEBUG_DYLIB=NO \
@@ -70,7 +67,7 @@ workflows:
           EXIT=$?
           echo "=== BUILD EXIT CODE: $EXIT ==="
           echo ""
-          echo "=== Entitlements del binario DESPUES de xcodebuild ==="
+          echo "=== Entitlements del binario DESPUES de xcodebuild (sin firma) ==="
           APP_PATH_AFTER_BUILD=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
           if [ -n "$APP_PATH_AFTER_BUILD" ]; then
             codesign -d --entitlements :- "$APP_PATH_AFTER_BUILD" 2>&1
