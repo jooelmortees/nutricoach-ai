@@ -48,6 +48,12 @@ workflows:
           xcodebuild -resolvePackageDependencies \
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach
+      - name: Set up Xcode project for manual code signing
+        script: |
+          # Asocia el provisioning profile al target NutriCoach y configura
+          # el signing style manual. Es necesario porque xcodegen regenera
+          # el proyecto desde project.yml y pierde la asociacion con el profile.
+          xcode-project use-profiles --project ios/NutriCoach.xcodeproj
       - name: Set up code signing (keychain + cert + profile)
         script: |
           # Debug: verificar env vars
