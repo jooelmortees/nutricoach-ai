@@ -15,17 +15,13 @@ workflows:
       groups:
         - Supabase
         - Certificado
-    signing:
-      override:
-        sign_style: manual
+      # iOS signing: Codemagic inyecta CM_CERTIFICATE, CM_CERTIFICATE_PASSWORD
+      # y CM_PROVISIONING_PROFILE desde el cert/profile "NutriCoach" subidos a
+      # Personal Account > Code signing identities. El bundle_id debe coincidir
+      # con el del .mobileprovision (com.joelmortees.nutricoach).
+      ios_signing:
         distribution_type: development
-        # Cert y profile subidos a Personal Account > Code signing identities
-        # con nombre "NutriCoach" (ambos). El password se inyecta via
-        # env var CERT_PASSWORD del grupo "Certificado".
-        cert_p12: NutriCoach
-        cert_password: $CERT_PASSWORD
-        provisioning_profiles:
-          - NutriCoach
+        bundle_identifier: com.joelmortees.nutricoach
     triggering:
       events:
         - push
@@ -52,13 +48,34 @@ workflows:
           xcodebuild -resolvePackageDependencies \
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach
+      - name: Set up code signing (keychain + cert + profile)
+        script: |
+          # Crea keychain temporal
+          keychain initialize
+          # Decodifica cert (base64) y lo anade al keychain
+          echo "=== Anadiendo cert al keychain ==="
+          echo $CM_CERTIFICATE | base64 --decode > /tmp/cert.p12
+          keychain add-certificates \
+            --certificate /tmp/cert.p12 \
+            --certificate-password $CERT_PASSWORD
+          # Decodifica profile y lo guarda en el path que xcodebuild espera
+          echo ""
+          echo "=== Guardando provisioning profile ==="
+          PROFILES_HOME="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILES_HOME"
+          PROFILE_PATH="$(mktemp "$PROFILES_HOME"/$(uuidgen).mobileprovision)"
+          echo $CM_PROVISIONING_PROFILE | base64 --decode > "$PROFILE_PATH"
+          echo "Profile: $PROFILE_PATH"
+          # Verificacion rapida del profile
+          security cms -D -i "$PROFILE_PATH" 2>&1 | head -5
       - name: Build (Debug, signed)
         script: |
           mkdir -p build
           set -o pipefail
-          # Codemagic inyecta CODE_SIGN_IDENTITY y CODE_SIGNING_REQUIRED
-          # automaticamente desde la seccion `signing` de arriba. Los entitlements
-          # del archivo .entitlements se inyectan en el binario durante el build.
+          # xcodebuild firma automaticamente usando:
+          # - El cert del keychain (anadido en el step anterior)
+          # - El provisioning profile decodificado
+          # - Los entitlements del .entitlements
           xcodebuild \
             -project ios/NutriCoach.xcodeproj \
             -scheme NutriCoach \
