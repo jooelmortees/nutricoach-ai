@@ -224,6 +224,9 @@ final class DashboardViewModel: ObservableObject {
     @Published var errorMessage: String?
 
     func loadInitial() async {
+        // Asegurar que iOS muestre el dialogo de permisos si nunca se ha
+        // preguntado (o si los permisos cambiaron desde Ajustes).
+        await HealthKitManager.shared.ensureAuthorizationPrompted()
         // Refrescar estado REAL de autorizacion (puede haber cambiado desde onboarding)
         let authorized = HealthKitManager.shared.refreshAuthorizationStatus()
         hasAuthorizedHealthKit = authorized

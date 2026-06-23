@@ -105,6 +105,31 @@ final class HealthKitManager: ObservableObject {
         return real
     }
 
+    /// Asegura que el usuario haya sido preguntado por los permisos de HealthKit.
+    /// Si el status es .notDetermined, muestra el dialogo de iOS.
+    /// Esto es necesario porque `authorizationStatus(for:)` no refleja cambios
+    /// hechos en Ajustes hasta que la app llame explicitamente a
+    /// `requestAuthorization(toShare:read:)`.
+    func ensureAuthorizationPrompted() async {
+        let store = HKHealthStore()
+        var needsPrompt = false
+        for id in keyTypes {
+            guard let type = HKQuantityType.quantityType(forIdentifier: id) else { continue }
+            if store.authorizationStatus(for: type) == .notDetermined {
+                needsPrompt = true
+                break
+            }
+        }
+        if needsPrompt {
+            do {
+                try await store.requestAuthorization(toShare: writeTypes, read: readTypes)
+            } catch {
+                AppLogger.warning("ensureAuthorizationPrompted fallo: \(error.localizedDescription)")
+            }
+        }
+        isAuthorized = Self.checkAuthorizationStatus(store: store)
+    }
+
     /// Sincroniza los últimos N días de HealthKit a Supabase vía Edge Function.
     /// Captura errores internamente y los publica en `lastError` para que las
     /// vistas no tengan que propagar `try` por encima.
