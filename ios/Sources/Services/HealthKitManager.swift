@@ -113,7 +113,7 @@ final class HealthKitManager: ObservableObject {
     func ensureAuthorizationPrompted() async {
         let store = HKHealthStore()
         var needsPrompt = false
-        for id in keyTypes {
+        for id in HealthKitManager.keyTypes {
             guard let type = HKQuantityType.quantityType(forIdentifier: id) else { continue }
             if store.authorizationStatus(for: type) == .notDetermined {
                 needsPrompt = true
