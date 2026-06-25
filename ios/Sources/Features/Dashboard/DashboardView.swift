@@ -47,7 +47,17 @@ struct DashboardView: View {
                 await viewModel.refresh()
             }
             .task {
+                // Configurar callback de observer para recargar en tiempo real
+                HealthKitManager.shared.onDataUpdated = {
+                    Task { await viewModel.refresh() }
+                }
+                // Iniciar observers de HealthKit (pasos, FC, energia, sueno)
+                HealthKitManager.shared.startObserving()
                 await viewModel.loadInitial()
+            }
+            .onDisappear {
+                // Detener observers al salir de la pestaña
+                HealthKitManager.shared.stopObserving()
             }
         }
     }
@@ -304,14 +314,18 @@ final class DashboardViewModel: ObservableObject {
                 }
                 .first?.value
 
-            // Sueño: minutos de hoy (recorded_at = medianoche del dia).
-            // HealthKit registra el sueño de la noche anterior con la fecha
-            // del dia en que termina (esta madrugada). Sumamos los de hoy.
+            // Sueño: HealthKit registra el sueño con startDate=anoche, endDate=hoy.
+            // El recorded_at que guardamos es medianoche del dia de startDate (anoche).
+            // Para mostrar el sueño de "esta noche", buscamos el de hoy + ayer
+            // (la noche que acaba de terminar o esta en curso).
+            let yesterday = calendar.date(byAdding: .day, value: -1, to: now) ?? now
             let sleepMinutesToday = metrics
                 .filter { $0.type == "sleep_minutes" }
                 .filter { metric in
                     let date = DateParsing.parse(metric.recordedAt) ?? now
-                    return calendar.isDate(date, inSameDayAs: now)
+                    // Matchea si el sueño corresponde a hoy o a ayer (anoche)
+                    return calendar.isDate(date, inSameDayAs: now) ||
+                           calendar.isDate(date, inSameDayAs: yesterday)
                 }
                 .reduce(0.0) { $0 + $1.value }
             self.sleepHours = sleepMinutesToday / 60.0  // minutos a horas

@@ -492,10 +492,10 @@ async function executeTool(
         const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
         const { data, error } = await supabase
           .from("meals")
-          .select("description, kcal, protein_g, carbs_g, fat_g, consumed_at")
+          .select("name, meal_type, total_kcal, total_protein_g, total_carbs_g, total_fat_g, logged_at")
           .eq("user_id", userId)
-          .gte("consumed_at", weekAgo.toISOString())
-          .order("consumed_at", { ascending: false });
+          .gte("logged_at", weekAgo.toISOString())
+          .order("logged_at", { ascending: false });
         if (error) {
           return { content: `Error: ${error.message}`, summary: "Error leyendo meals" };
         }
@@ -519,6 +519,92 @@ async function executeTool(
         return {
           content: JSON.stringify({ metrics: data ?? [], count: data?.length ?? 0 }),
           summary: `${data?.length ?? 0} metricas de los ultimos 7 dias`
+        };
+      }
+      case "calculate_daily_target": {
+        // Mifflin-St Jeor para calcular TMB (Tasa Metabolica Basal)
+        const { weight_kg, height_cm, age, sex, activity_level, goal } = args;
+        if (!weight_kg || !height_cm || !age || !sex || !activity_level || !goal) {
+          return { content: "Error: faltan parametros", summary: "Error en calculate_daily_target" };
+        }
+        // TMB
+        let bmr: number;
+        if (sex === "male") {
+          bmr = 10 * weight_kg + 6.25 * height_cm - 5 * age + 5;
+        } else {
+          bmr = 10 * weight_kg + 6.25 * height_cm - 5 * age - 161;
+        }
+        // Multiplicador de actividad
+        const activityMultipliers: Record<string, number> = {
+          sedentary: 1.2,
+          lightly_active: 1.375,
+          moderately_active: 1.55,
+          very_active: 1.725,
+          extremely_active: 1.9,
+        };
+        const tdee = bmr * (activityMultipliers[activity_level] ?? 1.55);
+        // Ajuste por objetivo
+        let dailyKcal: number;
+        let proteinPct: number, carbsPct: number, fatPct: number;
+        switch (goal) {
+          case "lose_weight":
+            dailyKcal = Math.round(tdee - 500);
+            proteinPct = 0.40; carbsPct = 0.35; fatPct = 0.25;
+            break;
+          case "gain_muscle":
+            dailyKcal = Math.round(tdee + 300);
+            proteinPct = 0.30; carbsPct = 0.45; fatPct = 0.25;
+            break;
+          case "recomposition":
+            dailyKcal = Math.round(tdee);
+            proteinPct = 0.35; carbsPct = 0.40; fatPct = 0.25;
+            break;
+          case "performance":
+            dailyKcal = Math.round(tdee + 200);
+            proteinPct = 0.25; carbsPct = 0.50; fatPct = 0.25;
+            break;
+          case "health":
+          case "maintain":
+          default:
+            dailyKcal = Math.round(tdee);
+            proteinPct = 0.30; carbsPct = 0.40; fatPct = 0.30;
+            break;
+        }
+        const proteinG = Math.round((dailyKcal * proteinPct) / 4);
+        const carbsG = Math.round((dailyKcal * carbsPct) / 4);
+        const fatG = Math.round((dailyKcal * fatPct) / 9);
+
+        // Guardar en el perfil del usuario
+        const { error: updateError } = await supabase
+          .from("profiles")
+          .update({
+            daily_kcal_target: dailyKcal,
+            daily_protein_g: proteinG,
+            daily_carbs_g: carbsG,
+            daily_fat_g: fatG,
+            weight_kg,
+            height_cm,
+            goal,
+            activity_level,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", userId);
+        if (updateError) {
+          console.error("calculate_daily_target update error:", updateError);
+        }
+        return {
+          content: JSON.stringify({
+            ok: true,
+            bmr: Math.round(bmr),
+            tdee: Math.round(tdee),
+            daily_kcal_target: dailyKcal,
+            daily_protein_g: proteinG,
+            daily_carbs_g: carbsG,
+            daily_fat_g: fatG,
+            macros_split: { protein: `${proteinPct * 100}%`, carbs: `${carbsPct * 100}%`, fat: `${fatPct * 100}%` },
+            saved_to_profile: !updateError,
+          }),
+          summary: `Objetivo calculado: ${dailyKcal} kcal (${proteinG}P/${carbsG}C/${fatG}G)`
         };
       }
       default:
@@ -552,8 +638,35 @@ TUS REGLAS:
    - get_health_metrics: para ver peso, pasos, FC, etc. de la última semana
    - remember_fact: para guardar info importante que el usuario te cuente (alergia, preferencia, objetivo)
    - web_search: para buscar info nutricional actualizada
+   - calculate_daily_target: para calcular kcal/macros diarias recomendadas según peso, altura, edad, sexo, actividad y objetivo
 6. ANTES de pedir datos al usuario, CONSULTA las herramientas. Solo pregunta si no puedes obtener la info.
-7. Cuando el usuario envíe una FOTO DE COMIDA, tu respuesta DEBE empezar con un bloque JSON válido con las macros estimadas, seguido de un comentario en español.
+7. Si el usuario no tiene objetivo diario configurado, pregúntale sus datos (peso, altura, edad, sexo, nivel de actividad, objetivo) y usa calculate_daily_target para calcularlo.
+
+FORMATO DE MACROS PARA COMIDAS:
+Cuando el usuario te describa una comida o envíe una foto, tu respuesta DEBE empezar con un bloque JSON válido con este formato EXACTO:
+
+{"description": "nombre de la comida", "meal_type": "breakfast|lunch|dinner|snack|other", "kcal": 450, "protein_g": 25, "carbs_g": 55, "fat_g": 15, "confidence": 0.8, "ingredients": [{"name": "huevo", "quantity": 2, "unit": "unidades"}, {"name": "pan integral", "quantity": 50, "unit": "gramos"}]}
+
+Reglas del JSON:
+- description: nombre claro de la comida (ej: "Tortilla francesa de 2 huevos con pan")
+- meal_type: uno de "breakfast", "lunch", "dinner", "snack", "other"
+- kcal: calorías totales estimadas (numero)
+- protein_g: gramos de proteína (numero, NO 0 ni null)
+- carbs_g: gramos de carbohidratos (numero, NO 0 ni null)
+- fat_g: gramos de grasa (numero, NO 0 ni null)
+- confidence: 0-1, tu confianza en la estimación (0.5 si es una foto ambigua, 0.9 si es claramente identificable)
+- ingredients: lista de ingredientes con nombre, cantidad y unidad. Si estimation es por foto, estima las cantidades.
+
+COMO ESTIMAR MACROS:
+- Usa tu conocimiento de densidad calórica: proteína 4 kcal/g, carbs 4 kcal/g, grasa 9 kcal/g.
+- Para huevos: 1 huevo mediano ~70 kcal, 6g proteína, 0.6g carbs, 5g grasa.
+- Para pan: ~250 kcal/100g, 9g proteína/100g, 45g carbs/100g, 3g grasa/100g.
+- Para arroz cocido: ~130 kcal/100g, 2.7g proteína, 28g carbs, 0.3g grasa.
+- Para pollo cocido: ~165 kcal/100g, 31g proteína, 0g carbs, 3.6g grasa.
+- Si no estás seguro de un ingrediente, estima conservadoramente y pon confidence mas baja.
+- NUNCA dejes protein_g, carbs_g o fat_g en 0 si la comida tiene macros. Si no los conoces, estima.
+
+Tras el JSON, escribe tu comentario en español explicando la comida, los ingredientes detectados y cualquier sugerencia.
 
 Responde de forma clara, concisa y útil.${profileText}${factsText}`;
 }
@@ -613,6 +726,25 @@ function getAgentTools() {
           type: "object",
           properties: { query: { type: "string", description: "Consulta de búsqueda" } },
           required: ["query"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "calculate_daily_target",
+        description: "Calcula las kcal diarias recomendadas y el reparto de macros (proteína, carbs, grasa) según los datos del usuario. Usa Mifflin-St Jeor. Guarda el resultado en el perfil del usuario automáticamente.",
+        parameters: {
+          type: "object",
+          properties: {
+            weight_kg: { type: "number", description: "Peso en kg" },
+            height_cm: { type: "number", description: "Altura en cm" },
+            age: { type: "number", description: "Edad en años" },
+            sex: { type: "string", enum: ["male", "female"], description: "Sexo biológico" },
+            activity_level: { type: "string", enum: ["sedentary", "lightly_active", "moderately_active", "very_active", "extremely_active"], description: "Nivel de actividad" },
+            goal: { type: "string", enum: ["lose_weight", "maintain", "gain_muscle", "recomposition", "health", "performance"], description: "Objetivo" },
+          },
+          required: ["weight_kg", "height_cm", "age", "sex", "activity_level", "goal"],
         },
       },
     },

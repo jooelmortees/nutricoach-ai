@@ -89,6 +89,7 @@ struct PendingMeal: Codable, Equatable {
     var carbs_g: Double?
     var fat_g: Double?
     var confidence: Double?
+    var ingredients: [PendingIngredient]?
 
     /// Busca un JSON de macros en el texto y lo extrae.
     /// Formato esperado: `{"description": "...", "kcal": N, "protein_g": N, ...}`
@@ -122,6 +123,18 @@ struct PendingMeal: Codable, Equatable {
               let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
+        // Parsear ingredientes
+        var ingredients: [PendingIngredient] = []
+        if let ingredientsArray = parsed["ingredients"] as? [[String: Any]] {
+            for ing in ingredientsArray {
+                let name = (ing["name"] as? String) ?? ""
+                let quantity = (ing["quantity"] as? NSNumber)?.doubleValue
+                let unit = (ing["unit"] as? String) ?? ""
+                if !name.isEmpty {
+                    ingredients.append(PendingIngredient(name: name, quantity: quantity, unit: unit))
+                }
+            }
+        }
         let meal = PendingMeal(
             description: (parsed["description"] as? String) ?? "Comida",
             meal_type: parsed["meal_type"] as? String,
@@ -129,9 +142,21 @@ struct PendingMeal: Codable, Equatable {
             protein_g: (parsed["protein_g"] as? NSNumber)?.doubleValue,
             carbs_g: (parsed["carbs_g"] as? NSNumber)?.doubleValue,
             fat_g: (parsed["fat_g"] as? NSNumber)?.doubleValue,
-            confidence: (parsed["confidence"] as? NSNumber)?.doubleValue
+            confidence: (parsed["confidence"] as? NSNumber)?.doubleValue,
+            ingredients: ingredients.isEmpty ? nil : ingredients
         )
         return (cleaned, meal)
+    }
+}
+
+struct PendingIngredient: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var name: String
+    var quantity: Double?
+    var unit: String
+
+    enum CodingKeys: String, CodingKey {
+        case name, quantity, unit
     }
 }
 

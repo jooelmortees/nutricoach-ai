@@ -15,6 +15,53 @@ final class HealthKitManager: ObservableObject {
 
     private let store = HKHealthStore()
 
+    /// Observer queries activas (para re-sync en tiempo real cuando HK tiene datos nuevos)
+    private var observerQueries: [HKObserverQuery] = []
+    /// Callback que se invoca cuando HealthKit detecta datos nuevos. Lo usa DashboardView.
+    var onDataUpdated: (() -> Void)?
+
+    /// Inicia observer queries para los tipos clave. Cuando HealthKit detecta
+    /// datos nuevos (pasos, FC, energia), invoca onDataUpdated para que la
+    /// vista recargue. No usa background delivery (solo foreground).
+    func startObserving() {
+        guard observerQueries.isEmpty else { return }  // ya activo
+        let typesToObserve: [HKQuantityTypeIdentifier] = [
+            .stepCount, .activeEnergyBurned, .heartRate, .restingHeartRate,
+        ]
+        for id in typesToObserve {
+            guard let type = HKQuantityType.quantityType(forIdentifier: id) else { continue }
+            let query = HKObserverQuery(sampleType: type, predicate: nil) { [weak self] _, completionHandler, _ in
+                Task { @MainActor [weak self] in
+                    self?.onDataUpdated?()
+                }
+                completionHandler()
+            }
+            store.execute(query)
+            observerQueries.append(query)
+        }
+        // Sueño es category type, no quantity
+        if let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) {
+            let query = HKObserverQuery(sampleType: sleepType, predicate: nil) { [weak self] _, completionHandler, _ in
+                Task { @MainActor [weak self] in
+                    self?.onDataUpdated?()
+                }
+                completionHandler()
+            }
+            store.execute(query)
+            observerQueries.append(query)
+        }
+        AppLogger.info("HealthKit observer queries iniciadas: \(observerQueries.count)")
+    }
+
+    /// Detiene los observer queries
+    func stopObserving() {
+        for query in observerQueries {
+            store.stop(query)
+        }
+        observerQueries.removeAll()
+        AppLogger.info("HealthKit observer queries detenidas")
+    }
+
     /// Clave de UserDefaults para evitar sincronizar mas de una vez por ventana
     private static let lastSyncKey = "hk_last_sync_at"
 

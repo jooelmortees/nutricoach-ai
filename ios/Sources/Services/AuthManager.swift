@@ -112,4 +112,10 @@ final class AuthManager: ObservableObject {
             AppLogger.warning("No se pudo cargar perfil: \(error.localizedDescription)")
         }
     }
+
+    /// Recarga el perfil desde Supabase. Usar tras actualizar campos del perfil.
+    func refreshProfile() async {
+        guard let userId = profile?.id else { return }
+        await loadProfile(userId: userId)
+    }
 }

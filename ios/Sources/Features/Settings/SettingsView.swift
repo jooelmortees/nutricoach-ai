@@ -16,6 +16,12 @@ struct SettingsView: View {
     @State private var lastSyncDate: Date? = nil
     @State private var isConnectingHealthKit: Bool = false
     @State private var healthKitError: String? = nil
+    @State private var kcalTarget: String = ""
+    @State private var proteinTarget: String = ""
+    @State private var carbsTarget: String = ""
+    @State private var fatTarget: String = ""
+    @State private var isSavingTargets: Bool = false
+    @State private var targetsSaved: Bool = false
 
     // Clave compartida con HealthKitManager para leer el timestamp de ultima sync.
     // La fuente de verdad es `HealthKitManager.lastSyncKey` (privado al modulo);
@@ -166,6 +172,73 @@ struct SettingsView: View {
                     Toggle("Vibración al enviar", isOn: $hapticsEnabled)
                 }
 
+                // MARK: - Objetivo diario
+                Section("Objetivo diario") {
+                    if let target = auth.profile?.dailyKcalTarget, target > 0, !targetsSaved {
+                        LabeledContent("Calorías", value: "\(target) kcal")
+                        if let p = auth.profile?.dailyProteinG { LabeledContent("Proteínas", value: "\(p) g") }
+                        if let c = auth.profile?.dailyCarbsG { LabeledContent("Carbohidratos", value: "\(c) g") }
+                        if let f = auth.profile?.dailyFatG { LabeledContent("Grasas", value: "\(f) g") }
+                        Button("Editar objetivo") {
+                            kcalTarget = String(target)
+                            proteinTarget = auth.profile?.dailyProteinG.map { String($0) } ?? ""
+                            carbsTarget = auth.profile?.dailyCarbsG.map { String($0) } ?? ""
+                            fatTarget = auth.profile?.dailyFatG.map { String($0) } ?? ""
+                            targetsSaved = true
+                        }
+                    } else {
+                        HStack {
+                            Text("Kcal")
+                            Spacer()
+                            TextField("ej. 2200", text: $kcalTarget)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 100)
+                        }
+                        HStack {
+                            Text("Proteínas (g)")
+                            Spacer()
+                            TextField("ej. 140", text: $proteinTarget)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 100)
+                        }
+                        HStack {
+                            Text("Carbos (g)")
+                            Spacer()
+                            TextField("ej. 220", text: $carbsTarget)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 100)
+                        }
+                        HStack {
+                            Text("Grasas (g)")
+                            Spacer()
+                            TextField("ej. 70", text: $fatTarget)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 100)
+                        }
+                        Button {
+                            Task {
+                                isSavingTargets = true
+                                await saveTargets()
+                                isSavingTargets = false
+                            }
+                        } label: {
+                            HStack {
+                                if isSavingTargets { ProgressView().controlSize(.small) }
+                                Text(isSavingTargets ? "Guardando..." : "Guardar objetivo")
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .disabled(isSavingTargets || kcalTarget.isEmpty)
+                    }
+                    Text("Pide al coach que te calcule el objetivo ideal: dile tu peso, altura, edad y actividad.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 // MARK: - Agente
                 Section("Agente") {
                     NavigationLink {
@@ -262,5 +335,31 @@ struct SettingsView: View {
         if elapsed < 3600 { return "hace \(Int(elapsed/60))m" }
         if elapsed < 86400 { return "hace \(Int(elapsed/3600))h" }
         return "hace \(Int(elapsed/86400))d"
+    }
+
+    private func saveTargets() async {
+        guard let userId = auth.profile?.id.uuidString else { return }
+        let kcal = Int(kcalTarget) ?? 0
+        let protein = Int(proteinTarget) ?? 0
+        let carbs = Int(carbsTarget) ?? 0
+        let fat = Int(fatTarget) ?? 0
+        do {
+            try await SupabaseService.shared.client
+                .from("profiles")
+                .update([
+                    "daily_kcal_target": kcal,
+                    "daily_protein_g": protein,
+                    "daily_carbs_g": carbs,
+                    "daily_fat_g": fat,
+                    "updated_at": ISO8601DateFormatter().string(from: Date())
+                ])
+                .eq("id", value: userId)
+                .execute()
+            // Refrescar el perfil en AuthManager
+            await auth.refreshProfile()
+            targetsSaved = false
+        } catch {
+            healthKitError = "Error guardando objetivo: \(error.localizedDescription)"
+        }
     }
 }

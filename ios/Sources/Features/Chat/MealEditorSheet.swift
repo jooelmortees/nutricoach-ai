@@ -107,6 +107,26 @@ struct MealEditorSheet: View {
                 }
             }
 
+            Section("Ingredientes") {
+                if let ings = meal.ingredients, !ings.isEmpty {
+                    ForEach(ings) { ing in
+                        HStack {
+                            TextField("Ingrediente", text: ingredientNameBinding(for: ing))
+                                .frame(maxWidth: .infinity)
+                            TextField("Cant.", text: ingredientQtyBinding(for: ing))
+                                .keyboardType(.decimalPad)
+                                .frame(width: 60)
+                            TextField("Unidad", text: ingredientUnitBinding(for: ing))
+                                .frame(width: 70)
+                        }
+                    }
+                } else {
+                    Text("Sin ingredientes detectados")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             if let err = saveError {
                 Section {
                     Text(err)
@@ -210,5 +230,40 @@ struct MealEditorSheet: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
+    }
+
+    // MARK: - Ingredient bindings
+
+    private func ingredientNameBinding(for ing: PendingIngredient) -> Binding<String> {
+        Binding(
+            get: { ing.name },
+            set: { newValue in
+                if let idx = meal.ingredients?.firstIndex(where: { $0.id == ing.id }) {
+                    meal.ingredients?[idx].name = newValue
+                }
+            }
+        )
+    }
+
+    private func ingredientQtyBinding(for ing: PendingIngredient) -> Binding<String> {
+        Binding(
+            get: { ing.quantity.map { String(format: "%.0f", $0) } ?? "" },
+            set: { newValue in
+                if let idx = meal.ingredients?.firstIndex(where: { $0.id == ing.id }) {
+                    meal.ingredients?[idx].quantity = Double(newValue.replacingOccurrences(of: ",", with: "."))
+                }
+            }
+        )
+    }
+
+    private func ingredientUnitBinding(for ing: PendingIngredient) -> Binding<String> {
+        Binding(
+            get: { ing.unit },
+            set: { newValue in
+                if let idx = meal.ingredients?.firstIndex(where: { $0.id == ing.id }) {
+                    meal.ingredients?[idx].unit = newValue
+                }
+            }
+        )
     }
 }
