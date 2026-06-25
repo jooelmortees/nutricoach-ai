@@ -275,10 +275,9 @@ final class DashboardViewModel: ObservableObject {
             var energyByDay: [Int: Double] = [:]
 
             for m in metrics {
-                // Parsear fecha
-                let f = ISO8601DateFormatter()
-                f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                let date = f.date(from: m.recordedAt) ?? f.date(from: String(m.recordedAt.prefix(19)) + "Z") ?? now
+                // Parsear fecha con helper robusto (PostgREST no incluye fracciones
+                // de segundo y ISO8601DateFormatter.withFractionalSeconds falla).
+                let date = DateParsing.parse(m.recordedAt) ?? now
                 let daysAgo = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: today).day ?? 0
                 let idx = 6 - min(max(daysAgo, 0), 6)  // 0 = hace 6 dias, 6 = hoy
                 // Nombres snake_case consistentes con HealthKitManager.metricName(for:)
@@ -300,9 +299,7 @@ final class DashboardViewModel: ObservableObject {
             self.restingHR = metrics
                 .filter { $0.type == "resting_heart_rate" }
                 .filter { metric in
-                    let f = ISO8601DateFormatter()
-                    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                    let date = f.date(from: metric.recordedAt) ?? now
+                    let date = DateParsing.parse(metric.recordedAt) ?? now
                     return calendar.isDate(date, inSameDayAs: now)
                 }
                 .first?.value
@@ -313,9 +310,7 @@ final class DashboardViewModel: ObservableObject {
             let sleepMinutesToday = metrics
                 .filter { $0.type == "sleep_minutes" }
                 .filter { metric in
-                    let f = ISO8601DateFormatter()
-                    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                    let date = f.date(from: metric.recordedAt) ?? now
+                    let date = DateParsing.parse(metric.recordedAt) ?? now
                     return calendar.isDate(date, inSameDayAs: now)
                 }
                 .reduce(0.0) { $0 + $1.value }
