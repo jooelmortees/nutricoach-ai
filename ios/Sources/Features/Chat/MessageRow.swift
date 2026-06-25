@@ -82,13 +82,13 @@ struct MessageRow: View {
 // MARK: - Macros detectadas
 
 struct PendingMeal: Codable, Equatable {
-    let description: String
-    let meal_type: String?
-    let kcal: Double?
-    let protein_g: Double?
-    let carbs_g: Double?
-    let fat_g: Double?
-    let confidence: Double?
+    var description: String
+    var meal_type: String?
+    var kcal: Double?
+    var protein_g: Double?
+    var carbs_g: Double?
+    var fat_g: Double?
+    var confidence: Double?
 
     /// Busca un JSON de macros en el texto y lo extrae.
     /// Formato esperado: `{"description": "...", "kcal": N, "protein_g": N, ...}`
@@ -249,8 +249,8 @@ private struct TextBubble: View {
                         MarkdownText(text: extracted.cleaned)
                     }
                     // Tarjeta de macros
-                    MacrosCard(meal: macros, onSave: {
-                        onSaveMeal(macros)
+                    MacrosCard(meal: macros, onSave: { editedMeal in
+                        onSaveMeal(editedMeal)
                     })
                 }
             } else {
@@ -316,8 +316,16 @@ private struct MarkdownText: View {
 
 private struct MacrosCard: View {
     let meal: PendingMeal
-    let onSave: () -> Void
+    let onSave: (PendingMeal) -> Void
     @State private var saved = false
+    @State private var showEditor = false
+    @State private var editableMeal: PendingMeal
+
+    init(meal: PendingMeal, onSave: @escaping (PendingMeal) -> Void) {
+        self.meal = meal
+        self.onSave = onSave
+        self._editableMeal = State(initialValue: meal)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -345,10 +353,10 @@ private struct MacrosCard: View {
                 }
             }
 
-            Button(action: onSave) {
+            Button(action: { showEditor = true }) {
                 HStack {
-                    Image(systemName: saved ? "checkmark.circle.fill" : "plus.circle.fill")
-                    Text(saved ? "Guardado en tu día" : "Guardar en mi día")
+                    Image(systemName: saved ? "checkmark.circle.fill" : "square.and.pencil")
+                    Text(saved ? "Guardado en tu día" : "Revisar y guardar")
                 }
                 .font(.subheadline)
                 .fontWeight(.medium)
@@ -358,6 +366,18 @@ private struct MacrosCard: View {
                 .foregroundStyle(.green)
             }
             .disabled(saved)
+            .sheet(isPresented: $showEditor) {
+                MealEditorSheet(
+                    meal: $editableMeal,
+                    onSave: { editedMeal in
+                        onSave(editedMeal)
+                        await MainActor.run {
+                            saved = true
+                        }
+                        return true
+                    }
+                )
+            }
             .onChange(of: saved) { _, newValue in
                 if newValue {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {

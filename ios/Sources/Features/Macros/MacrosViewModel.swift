@@ -7,21 +7,19 @@ import SwiftUI
 
 struct LoggedMeal: Identifiable, Decodable {
     let id: UUID
-    let description: String
+    let name: String
     let meal_type: String?
-    let kcal: Double?
-    let protein_g: Double?
-    let carbs_g: Double?
-    let fat_g: Double?
-    let confidence: Double?
+    let total_kcal: Double?
+    let total_protein_g: Double?
+    let total_carbs_g: Double?
+    let total_fat_g: Double?
+    let total_fiber_g: Double?
     let source: String?
-    let consumed_at: String
+    let logged_at: String
     let created_at: String
 
-    var consumedAt: Date {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f.date(from: consumed_at) ?? Date()
+    var loggedAt: Date {
+        DateParsing.parse(logged_at) ?? Date()
     }
 }
 
@@ -42,10 +40,10 @@ final class MacrosViewModel: ObservableObject {
     var totals: Totals {
         meals.reduce(Totals()) { acc, meal in
             Totals(
-                kcal: acc.kcal + (meal.kcal ?? 0),
-                protein: acc.protein + (meal.protein_g ?? 0),
-                carbs: acc.carbs + (meal.carbs_g ?? 0),
-                fat: acc.fat + (meal.fat_g ?? 0)
+                kcal: acc.kcal + (meal.total_kcal ?? 0),
+                protein: acc.protein + (meal.total_protein_g ?? 0),
+                carbs: acc.carbs + (meal.total_carbs_g ?? 0),
+                fat: acc.fat + (meal.total_fat_g ?? 0)
             )
         }
     }
@@ -69,37 +67,37 @@ final class MacrosViewModel: ObservableObject {
     private func fetchMeals(userId: String) async throws {
         struct Row: Decodable {
             let id: UUID
-            let description: String
+            let name: String
             let meal_type: String?
-            let kcal: Double?
-            let protein_g: Double?
-            let carbs_g: Double?
-            let fat_g: Double?
-            let confidence: Double?
+            let total_kcal: Double?
+            let total_protein_g: Double?
+            let total_carbs_g: Double?
+            let total_fat_g: Double?
+            let total_fiber_g: Double?
             let source: String?
-            let consumed_at: String
+            let logged_at: String
             let created_at: String
         }
         let today = Calendar.current.startOfDay(for: Date()).ISO8601Format()
         let rows: [Row] = try await SupabaseService.shared.client
             .from("meals")
-            .select("id,description,meal_type,kcal,protein_g,carbs_g,fat_g,confidence,source,consumed_at,created_at")
+            .select("id,name,meal_type,total_kcal,total_protein_g,total_carbs_g,total_fat_g,total_fiber_g,source,logged_at,created_at")
             .eq("user_id", value: userId)
-            .gte("consumed_at", value: today)
-            .order("consumed_at", ascending: true)
+            .gte("logged_at", value: today)
+            .order("logged_at", ascending: true)
             .execute()
             .value
         meals = rows.map { LoggedMeal(
             id: $0.id,
-            description: $0.description,
+            name: $0.name,
             meal_type: $0.meal_type,
-            kcal: $0.kcal,
-            protein_g: $0.protein_g,
-            carbs_g: $0.carbs_g,
-            fat_g: $0.fat_g,
-            confidence: $0.confidence,
+            total_kcal: $0.total_kcal,
+            total_protein_g: $0.total_protein_g,
+            total_carbs_g: $0.total_carbs_g,
+            total_fat_g: $0.total_fat_g,
+            total_fiber_g: $0.total_fiber_g,
             source: $0.source,
-            consumed_at: $0.consumed_at,
+            logged_at: $0.logged_at,
             created_at: $0.created_at
         ) }
     }

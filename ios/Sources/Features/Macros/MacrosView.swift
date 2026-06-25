@@ -145,18 +145,18 @@ struct MealRow: View {
                 .foregroundStyle(.green)
                 .frame(width: 32)
             VStack(alignment: .leading, spacing: 4) {
-                Text(meal.description).font(.body)
-                if let kcal = meal.kcal {
+                Text(meal.name).font(.body)
+                if let kcal = meal.total_kcal {
                     HStack(spacing: 8) {
                         Text("\(Int(kcal)) kcal")
-                        if let p = meal.protein_g { Text("· P \(Int(p))g") }
-                        if let c = meal.carbs_g { Text("· C \(Int(c))g") }
-                        if let f = meal.fat_g { Text("· G \(Int(f))g") }
+                        if let p = meal.total_protein_g { Text("· P \(Int(p))g") }
+                        if let c = meal.total_carbs_g { Text("· C \(Int(c))g") }
+                        if let f = meal.total_fat_g { Text("· G \(Int(f))g") }
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
-                Text(meal.consumedAt, format: .dateTime.hour().minute())
+                Text(meal.loggedAt, format: .dateTime.hour().minute())
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
