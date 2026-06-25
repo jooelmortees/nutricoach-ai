@@ -309,9 +309,12 @@ final class HealthKitManager: ObservableObject {
         }
     }
 
-    /// Query por dia con limite de muestras por dia (evita HKObjectQueryNoLimit
-    /// que puede traer miles de samples de heart rate).
-    /// Devuelve un HealthMetricPayload por dia con valor agregado (sum o last).
+    /// Query por dia usando HKStatisticsQuery para acumulables (deduplica fuentes:
+    /// iPhone + Apple Watch registran los mismos pasos; HKStatisticsQuery.cumulativeSum
+    /// los suma sin duplicar, a diferencia de HKSampleQuery + suma manual).
+    ///
+    /// Para instantaneos (FC, peso) usa HKSampleQuery con sort desc + limit 1
+    /// (ultimo valor del dia). No hay duplicacion problematica en instantaneos.
     private func queryAggregatedByDay(
         id: HKQuantityTypeIdentifier,
         from start: Date,
@@ -323,48 +326,51 @@ final class HealthKitManager: ObservableObject {
         let metricName = Self.metricName(for: id)
         let calendar = Calendar.current
 
-        // Iterar por dias
         var current = calendar.startOfDay(for: start)
         let endDay = calendar.startOfDay(for: end)
         var results: [HealthMetricPayload] = []
 
         while current <= endDay {
             let dayEnd = calendar.date(byAdding: .day, value: 1, to: current) ?? current
-            // Para tipos instantaneos, ordenar por start date desc y coger el 1
-            // Para tipos acumulables, traer todo y sumar
-            let limit = (strategy == .last) ? 1 : HKObjectQueryNoLimit
+            let predicate = HKQuery.predicateForSamples(withStart: current, end: dayEnd, options: .strictStartDate)
 
-            let daySamples: [HKQuantitySample] = try await withCheckedThrowingContinuation { continuation in
-                let predicate = HKQuery.predicateForSamples(withStart: current, end: dayEnd, options: .strictStartDate)
-                let sortDescriptors: [NSSortDescriptor]? = (strategy == .last)
-                    ? [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)]
-                    : nil
-                let query = HKSampleQuery(
-                    sampleType: type,
-                    predicate: predicate,
-                    limit: limit,
-                    sortDescriptors: sortDescriptors
-                ) { _, samples, error in
-                    if let error = error {
-                        continuation.resume(throwing: error)
-                        return
-                    }
-                    continuation.resume(returning: (samples as? [HKQuantitySample]) ?? [])
-                }
-                store.execute(query)
-            }
-
-            if !daySamples.isEmpty {
-                let value: Double
+            let value: Double? = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Double?, Error>) in
                 switch strategy {
                 case .sum:
-                    value = daySamples.reduce(0) { $0 + $1.quantity.doubleValue(for: unit) }
+                    // HKStatisticsQuery.cumulativeSum deduplica fuentes (iPhone+Watch)
+                    let query = HKStatisticsQuery(
+                        quantityType: type,
+                        quantitySamplePredicate: predicate,
+                        options: .cumulativeSum
+                    ) { _, stats, error in
+                        if let error = error {
+                            continuation.resume(throwing: error)
+                            return
+                        }
+                        continuation.resume(returning: stats?.sumQuantity()?.doubleValue(for: unit))
+                    }
+                    store.execute(query)
                 case .last:
-                    value = daySamples[0].quantity.doubleValue(for: unit)
+                    // Ultimo valor del dia: HKSampleQuery sort desc + limit 1
+                    let query = HKSampleQuery(
+                        sampleType: type,
+                        predicate: predicate,
+                        limit: 1,
+                        sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)]
+                    ) { _, samples, error in
+                        if let error = error {
+                            continuation.resume(throwing: error)
+                            return
+                        }
+                        let last = (samples as? [HKQuantitySample])?.first
+                        continuation.resume(returning: last?.quantity.doubleValue(for: unit))
+                    }
+                    store.execute(query)
                 }
-                // recorded_at = inicio del dia (medianoche) en ISO8601 con zona
-                let dateFormatter = ISO8601DateFormatter()
-                let recordedAt = dateFormatter.string(from: current)
+            }
+
+            if let value = value {
+                let recordedAt = ISO8601DateFormatter().string(from: current)
                 results.append(HealthMetricPayload(
                     type: metricName,
                     value: value,

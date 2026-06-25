@@ -307,10 +307,22 @@ final class DashboardViewModel: ObservableObject {
                 }
                 .first?.value
 
-            // Sueño (suma de ayer noche o esta madrugada)
-            self.sleepHours = metrics
+            // Sueño: minutos de hoy (recorded_at = medianoche del dia).
+            // HealthKit registra el sueño de la noche anterior con la fecha
+            // del dia en que termina (esta madrugada). Sumamos los de hoy.
+            let sleepMinutesToday = metrics
                 .filter { $0.type == "sleep_minutes" }
-                .reduce(0.0) { $0 + $1.value } / 60.0  // minutos a horas
+                .filter { metric in
+                    let f = ISO8601DateFormatter()
+                    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                    let date = f.date(from: metric.recordedAt) ?? now
+                    return calendar.isDate(date, inSameDayAs: now)
+                }
+                .reduce(0.0) { $0 + $1.value }
+            self.sleepHours = sleepMinutesToday / 60.0  // minutos a horas
+        } catch is CancellationError {
+            // No es un error: la view se fue antes de terminar (cambio de tab).
+            // No mostramos mensaje.
         } catch {
             errorMessage = "Error cargando metricas: \(error.localizedDescription)"
         }
