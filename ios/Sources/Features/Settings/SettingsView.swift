@@ -350,8 +350,7 @@ struct SettingsView: View {
                     "daily_kcal_target": kcal,
                     "daily_protein_g": protein,
                     "daily_carbs_g": carbs,
-                    "daily_fat_g": fat,
-                    "updated_at": ISO8601DateFormatter().string(from: Date())
+                    "daily_fat_g": fat
                 ])
                 .eq("id", value: userId)
                 .execute()
