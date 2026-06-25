@@ -238,60 +238,145 @@ final class HealthKitManager: ObservableObject {
         return session.accessToken
     }
 
+    /// Recoge metricas agregadas por dia (un valor por tipo por dia).
+    /// Evita enviar miles de muestras raw (heart rate se muestrea cada 5-10s)
+    /// que saturan el isolate de Deno (limite 2s CPU / 250MB RAM -> 546).
+    ///
+    /// Tipos acumulables (suma del dia): steps, active_energy, basal_energy,
+    /// distance, flights_climbed, exercise_time, move_time, stand_time.
+    /// Tipos instantaneos (ultimo valor del dia): heart_rate, resting_heart_rate,
+    /// vo2max, body_weight, body_fat, oxygen_saturation, respiratory_rate.
     private func collectMetrics(from start: Date, to end: Date) async throws -> [HealthMetricPayload] {
         var out: [HealthMetricPayload] = []
-        let quantityTypes: [HKQuantityTypeIdentifier] = [
-            .heartRate, .restingHeartRate, .vo2Max, .stepCount,
-            .activeEnergyBurned, .basalEnergyBurned, .bodyMass,
-            .oxygenSaturation, .respiratoryRate,
+
+        // Tipos acumulables: suma del dia
+        let cumulativeTypes: [HKQuantityTypeIdentifier] = [
+            .stepCount, .activeEnergyBurned, .basalEnergyBurned,
+            .distanceWalkingRunning, .flightsClimbed,
+            .appleExerciseTime, .appleMoveTime, .appleStandTime,
         ]
-        for id in quantityTypes {
-            let samples = try await queryQuantity(id: id, from: start, to: end)
+        for id in cumulativeTypes {
+            let samples = try await queryAggregatedByDay(id: id, from: start, to: end, strategy: .sum)
             out.append(contentsOf: samples)
         }
-        // Sueño
+
+        // Tipos instantaneos: ultimo valor del dia
+        let instantTypes: [HKQuantityTypeIdentifier] = [
+            .heartRate, .restingHeartRate, .vo2Max, .bodyMass,
+            .bodyFatPercentage, .oxygenSaturation, .respiratoryRate,
+        ]
+        for id in instantTypes {
+            let samples = try await queryAggregatedByDay(id: id, from: start, to: end, strategy: .last)
+            out.append(contentsOf: samples)
+        }
+
+        // Sueño (agrega por dia, igual que los demas)
         let sleep = try await querySleep(from: start, to: end)
         out.append(contentsOf: sleep)
         return out
     }
 
-    private func queryQuantity(id: HKQuantityTypeIdentifier, from start: Date, to end: Date) async throws -> [HealthMetricPayload] {
-        guard let type = HKQuantityType.quantityType(forIdentifier: id) else { return [] }
-        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+    /// Estrategia de agregacion por dia
+    private enum AggregationStrategy {
+        case sum   // steps, kcal, distancia
+        case last  // FC, peso, SpO2 (ultimo valor del dia)
+    }
 
-        let capturedType = type
-        let capturedId = id
-        let dateFormatter = ISO8601DateFormatter()
-        let unit = Self.preferredUnit(for: capturedId)
-
-        return try await withCheckedThrowingContinuation { continuation in
-            let query = HKSampleQuery(
-                sampleType: capturedType,
-                predicate: predicate,
-                limit: HKObjectQueryNoLimit,
-                sortDescriptors: nil
-            ) { _, samples, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                    return
-                }
-                guard let quantitySamples = samples as? [HKQuantitySample] else {
-                    continuation.resume(returning: [])
-                    return
-                }
-                let typeName = capturedId.rawValue.replacingOccurrences(of: "HKQuantityTypeIdentifier", with: "")
-                let result: [HealthMetricPayload] = quantitySamples.map { sample in
-                    HealthMetricPayload(
-                        type: typeName,
-                        value: sample.quantity.doubleValue(for: unit),
-                        unit: unit.unitString,
-                        recorded_at: dateFormatter.string(from: sample.startDate)
-                    )
-                }
-                continuation.resume(returning: result)
-            }
-            store.execute(query)
+    /// Mapeo de HKQuantityTypeIdentifier a nombres snake_case consistentes
+    /// con la migracion 0001_init.sql (heart_rate, resting_heart_rate, steps, etc.).
+    private static func metricName(for id: HKQuantityTypeIdentifier) -> String {
+        switch id {
+        case .stepCount: return "steps"
+        case .heartRate: return "heart_rate"
+        case .restingHeartRate: return "resting_heart_rate"
+        case .walkingHeartRateAverage: return "walking_heart_rate_avg"
+        case .heartRateVariabilitySDNN: return "hrv_sdnn"
+        case .vo2Max: return "vo2max"
+        case .distanceWalkingRunning: return "distance_walking_running"
+        case .distanceCycling: return "distance_cycling"
+        case .activeEnergyBurned: return "active_energy"
+        case .basalEnergyBurned: return "basal_energy"
+        case .flightsClimbed: return "flights_climbed"
+        case .bodyMass: return "body_weight"
+        case .bodyFatPercentage: return "body_fat"
+        case .oxygenSaturation: return "oxygen_saturation"
+        case .bodyTemperature: return "body_temperature"
+        case .respiratoryRate: return "respiratory_rate"
+        case .appleExerciseTime: return "exercise_time"
+        case .appleMoveTime: return "move_time"
+        case .appleStandTime: return "stand_time"
+        default: return id.rawValue.replacingOccurrences(of: "HKQuantityTypeIdentifier", with: "").lowercased()
         }
+    }
+
+    /// Query por dia con limite de muestras por dia (evita HKObjectQueryNoLimit
+    /// que puede traer miles de samples de heart rate).
+    /// Devuelve un HealthMetricPayload por dia con valor agregado (sum o last).
+    private func queryAggregatedByDay(
+        id: HKQuantityTypeIdentifier,
+        from start: Date,
+        to end: Date,
+        strategy: AggregationStrategy
+    ) async throws -> [HealthMetricPayload] {
+        guard let type = HKQuantityType.quantityType(forIdentifier: id) else { return [] }
+        let unit = Self.preferredUnit(for: id)
+        let metricName = Self.metricName(for: id)
+        let calendar = Calendar.current
+
+        // Iterar por dias
+        var current = calendar.startOfDay(for: start)
+        let endDay = calendar.startOfDay(for: end)
+        var results: [HealthMetricPayload] = []
+
+        while current <= endDay {
+            let dayEnd = calendar.date(byAdding: .day, value: 1, to: current) ?? current
+            // Para tipos instantaneos, ordenar por start date desc y coger el 1
+            // Para tipos acumulables, traer todo y sumar
+            let limit = (strategy == .last) ? 1 : HKObjectQueryNoLimit
+
+            let daySamples: [HKQuantitySample] = try await withCheckedThrowingContinuation { continuation in
+                let predicate = HKQuery.predicateForSamples(withStart: current, end: dayEnd, options: .strictStartDate)
+                let sortDescriptors: [NSSortDescriptor]? = (strategy == .last)
+                    ? [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)]
+                    : nil
+                let query = HKSampleQuery(
+                    sampleType: type,
+                    predicate: predicate,
+                    limit: limit,
+                    sortDescriptors: sortDescriptors
+                ) { _, samples, error in
+                    if let error = error {
+                        continuation.resume(throwing: error)
+                        return
+                    }
+                    continuation.resume(returning: (samples as? [HKQuantitySample]) ?? [])
+                }
+                store.execute(query)
+            }
+
+            if !daySamples.isEmpty {
+                let value: Double
+                switch strategy {
+                case .sum:
+                    value = daySamples.reduce(0) { $0 + $1.quantity.doubleValue(for: unit) }
+                case .last:
+                    value = daySamples[0].quantity.doubleValue(for: unit)
+                }
+                // recorded_at = inicio del dia (medianoche) en ISO8601 con zona
+                let dateFormatter = ISO8601DateFormatter()
+                let recordedAt = dateFormatter.string(from: current)
+                results.append(HealthMetricPayload(
+                    type: metricName,
+                    value: value,
+                    unit: unit.unitString,
+                    recorded_at: recordedAt
+                ))
+            }
+
+            current = dayEnd
+        }
+
+        return results
     }
 
     /// Unit canónica por identificador. HealthKit no expone `sample.unit` en
@@ -326,42 +411,47 @@ final class HealthKitManager: ObservableObject {
 
     private func querySleep(from start: Date, to end: Date) async throws -> [HealthMetricPayload] {
         guard let type = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else { return [] }
-        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        let calendar = Calendar.current
+        var current = calendar.startOfDay(for: start)
+        let endDay = calendar.startOfDay(for: end)
+        var results: [HealthMetricPayload] = []
 
-        return try await withCheckedThrowingContinuation { continuation in
-            let query = HKSampleQuery(
-                sampleType: type,
-                predicate: predicate,
-                limit: HKObjectQueryNoLimit,
-                sortDescriptors: nil
-            ) { _, samples, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                    return
+        while current <= endDay {
+            let dayEnd = calendar.date(byAdding: .day, value: 1, to: current) ?? current
+            let predicate = HKQuery.predicateForSamples(withStart: current, end: dayEnd, options: .strictStartDate)
+
+            let daySamples: [HKCategorySample] = try await withCheckedThrowingContinuation { continuation in
+                let query = HKSampleQuery(
+                    sampleType: type,
+                    predicate: predicate,
+                    limit: HKObjectQueryNoLimit,
+                    sortDescriptors: nil
+                ) { _, samples, error in
+                    if let error = error {
+                        continuation.resume(throwing: error)
+                        return
+                    }
+                    continuation.resume(returning: (samples as? [HKCategorySample]) ?? [])
                 }
-                guard let categorySamples = samples as? [HKCategorySample] else {
-                    continuation.resume(returning: [])
-                    return
-                }
-                var total: TimeInterval = 0
-                for sample in categorySamples {
-                    total += sample.endDate.timeIntervalSince(sample.startDate)
-                }
-                guard total > 0 else {
-                    continuation.resume(returning: [])
-                    return
-                }
-                let recordedAt = ISO8601DateFormatter().string(from: end)
-                let payload = HealthMetricPayload(
+                store.execute(query)
+            }
+
+            var total: TimeInterval = 0
+            for sample in daySamples {
+                total += sample.endDate.timeIntervalSince(sample.startDate)
+            }
+            if total > 0 {
+                let recordedAt = ISO8601DateFormatter().string(from: current)
+                results.append(HealthMetricPayload(
                     type: "sleep_minutes",
                     value: Double(Int(total / 60)),
                     unit: "minutes",
                     recorded_at: recordedAt
-                )
-                continuation.resume(returning: [payload])
+                ))
             }
-            store.execute(query)
+            current = dayEnd
         }
+        return results
     }
 }
 

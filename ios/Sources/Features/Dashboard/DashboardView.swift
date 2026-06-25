@@ -281,9 +281,10 @@ final class DashboardViewModel: ObservableObject {
                 let date = f.date(from: m.recordedAt) ?? f.date(from: String(m.recordedAt.prefix(19)) + "Z") ?? now
                 let daysAgo = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: today).day ?? 0
                 let idx = 6 - min(max(daysAgo, 0), 6)  // 0 = hace 6 dias, 6 = hoy
-                if m.type.contains("step") {
+                // Nombres snake_case consistentes con HealthKitManager.metricName(for:)
+                if m.type == "steps" {
                     stepsByDay[idx, default: 0] += m.value
-                } else if m.type.contains("activeEnergy") {
+                } else if m.type == "active_energy" {
                     energyByDay[idx, default: 0] += m.value
                 }
             }
@@ -297,7 +298,7 @@ final class DashboardViewModel: ObservableObject {
 
             // FC reposo (ultimo valor del dia)
             self.restingHR = metrics
-                .filter { $0.type.contains("restingHeartRate") }
+                .filter { $0.type == "resting_heart_rate" }
                 .filter { metric in
                     let f = ISO8601DateFormatter()
                     f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -308,8 +309,8 @@ final class DashboardViewModel: ObservableObject {
 
             // Sueño (suma de ayer noche o esta madrugada)
             self.sleepHours = metrics
-                .filter { $0.type.contains("sleep") }
-                .reduce(0.0) { $0 + $1.value } / 3600.0  // minutos a horas
+                .filter { $0.type == "sleep_minutes" }
+                .reduce(0.0) { $0 + $1.value } / 60.0  // minutos a horas
         } catch {
             errorMessage = "Error cargando metricas: \(error.localizedDescription)"
         }
@@ -320,15 +321,18 @@ final class DashboardViewModel: ObservableObject {
             let supabase = SupabaseService.shared.client
             let today = Calendar.current.startOfDay(for: Date()).ISO8601Format()
             struct Meal: Decodable {
-                let kcal: Double?
+                let totalKcal: Double?
+                enum CodingKeys: String, CodingKey {
+                    case totalKcal = "total_kcal"
+                }
             }
             let meals: [Meal] = try await supabase
                 .from("meals")
-                .select("kcal")
-                .gte("consumed_at", value: today)
+                .select("total_kcal")
+                .gte("logged_at", value: today)
                 .execute()
                 .value
-            self.todaysKcal = meals.reduce(0) { $0 + ($1.kcal ?? 0) }
+            self.todaysKcal = meals.reduce(0) { $0 + ($1.totalKcal ?? 0) }
         } catch {
             // Silencioso
         }
