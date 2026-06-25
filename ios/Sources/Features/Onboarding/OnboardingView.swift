@@ -358,14 +358,21 @@ final class OnboardingViewModel: ObservableObject {
 
     init() {
         // Reflejar estado real al entrar al view model
-        refreshHealthKitStatus()
+        // NOTA: la comprobacion real de permisos de lectura es async
+        // (statusForAuthorizationRequest), pero init no puede ser async.
+        // Asumimos no autorizado hasta que refreshHealthKitStatusAsync corra.
+        // Se invoca en onAppear de la vista.
     }
 
-    /// Comprueba el estado REAL de autorizacion de HealthKit (no el prompt).
-    /// requestAuthorization SIEMPRE devuelve OK aunque el usuario deniegue,
-    /// asi que hay que mirar authorizationStatus(for:) tipo a tipo.
+    /// Comprueba el estado REAL de autorizacion de HealthKit.
+    /// Apple no expone si el usuario concedio/denegio read (privacidad):
+    /// solo podemos saber si ya se mostro el sheet de permisos.
+    /// Devuelve true si el sheet ya se mostro (statusForAuthorizationRequest == .unnecessary).
     func refreshHealthKitStatus() {
-        healthKitGranted = HealthKitManager.shared.refreshAuthorizationStatus()
+        Task {
+            let granted = await HealthKitManager.shared.refreshAuthorizationStatusAsync()
+            await MainActor.run { self.healthKitGranted = granted }
+        }
     }
 
     /// Mifflin-St Jeor para calcular TMB (Tasa Metabolica Basal)
@@ -397,15 +404,16 @@ final class OnboardingViewModel: ObservableObject {
         defer { isConnectingHealthKit = false }
         do {
             try await HealthKitManager.shared.requestAuthorization()
-            // Tras pedir, refrescar estado real
-            refreshHealthKitStatus()
-            if healthKitGranted {
+            // Tras pedir, refrescar estado real (ahora async)
+            let granted = await HealthKitManager.shared.refreshAuthorizationStatusAsync()
+            healthKitGranted = granted
+            if granted {
                 // Sync inicial inmediato: 7 dias hacia atras.
                 // force=true para saltarse el throttling de lastSyncAt
                 // (es la primera vez que conectamos).
                 await HealthKitManager.shared.syncToBackend(days: 7, force: true)
             } else {
-                errorMessage = "Has denegado el acceso a Apple Health. Puedes activarlo mas tarde en Ajustes de iOS > Salud > Datos y acceso > Apps."
+                errorMessage = "No se ha concedido acceso a Apple Health. Puedes activarlo mas tarde en Ajustes de iOS > Salud > Datos y acceso > Apps."
             }
         } catch {
             // Si falla, no es bloqueante - el user puede continuar sin HealthKit

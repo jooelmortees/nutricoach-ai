@@ -119,13 +119,13 @@ struct SettingsView: View {
                             Task {
                                 isConnectingHealthKit = true
                                 healthKitError = nil
-                                do {
+                                    do {
                                     try await HealthKitManager.shared.requestAuthorization()
                                     if healthKit.isAuthorized {
                                         await HealthKitManager.shared.syncToBackend(days: 7, force: true)
                                         refreshHealthKit()
                                     } else {
-                                        healthKitError = "Has denegado el acceso. Activalo en Ajustes de iOS > Salud > Datos y acceso > Apps."
+                                        healthKitError = "No se ha concedido acceso a Apple Health. Activa los permisos en Ajustes de iOS > Salud > Datos y acceso > Apps, o vuelve a pulsar Conectar."
                                     }
                                 } catch {
                                     healthKitError = "No se pudo conectar: \(error.localizedDescription)"
@@ -247,8 +247,13 @@ struct SettingsView: View {
     private func refreshHealthKit() {
         // Actualiza el manager (que ya esta observado por la View). No necesitamos
         // variable local: el @ObservedObject refresca la UI automaticamente.
-        _ = HealthKitManager.shared.refreshAuthorizationStatus()
-        lastSyncDate = UserDefaults.standard.object(forKey: lastSyncKey) as? Date
+        // Usamos la version async para comprobar correctamente permisos de lectura.
+        Task {
+            _ = await HealthKitManager.shared.refreshAuthorizationStatusAsync()
+            await MainActor.run {
+                lastSyncDate = UserDefaults.standard.object(forKey: lastSyncKey) as? Date
+            }
+        }
     }
 
     private func timeAgo(_ date: Date) -> String {

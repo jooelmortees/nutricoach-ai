@@ -228,7 +228,7 @@ final class DashboardViewModel: ObservableObject {
         // preguntado (o si los permisos cambiaron desde Ajustes).
         await HealthKitManager.shared.ensureAuthorizationPrompted()
         // Refrescar estado REAL de autorizacion (puede haber cambiado desde onboarding)
-        let authorized = HealthKitManager.shared.refreshAuthorizationStatus()
+        let authorized = await HealthKitManager.shared.refreshAuthorizationStatusAsync()
         hasAuthorizedHealthKit = authorized
 
         // Solo sincronizar si hay autorizacion REAL

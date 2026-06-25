@@ -18,12 +18,6 @@ final class HealthKitManager: ObservableObject {
     /// Clave de UserDefaults para evitar sincronizar mas de una vez por ventana
     private static let lastSyncKey = "hk_last_sync_at"
 
-    /// Tipos clave cuya autorizacion comprobamos para considerar "conectado".
-    /// Si ninguno esta autorizado, la app no intentara leer HK.
-    private static let keyTypes: [HKQuantityTypeIdentifier] = [
-        .stepCount, .heartRate, .restingHeartRate, .activeEnergyBurned,
-    ]
-
     /// Tipos que leemos del usuario
     private var readTypes: Set<HKObjectType> {
         var types: Set<HKObjectType> = []
@@ -79,28 +73,68 @@ final class HealthKitManager: ObservableObject {
             throw HealthKitError.notAvailable
         }
         try await store.requestAuthorization(toShare: writeTypes, read: readTypes)
-        // NO marcamos isAuthorized=true ciegamente: comprobamos el estado real
-        // por tipo. requestAuthorization SIEMPRE resuelve OK aunque el usuario
-        // haya denegado todo (es un prompt, no una promesa).
-        isAuthorized = Self.checkAuthorizationStatus(store: store)
+        // Apple, por privacidad, NO expone el estado real de permisos de lectura
+        // en `authorizationStatus(for:)` (siempre devuelve .notDetermined para read).
+        // Solo podemos saber si ya se ha mostrado el sheet al usuario. Si es asi,
+        // asumimos conectado; los queries reales devolveran 0 muestras si deniego.
+        isAuthorized = await Self.checkAuthorizationStatus(store: store, readTypes: readTypes)
     }
 
-    /// Comprueba el estado REAL de autorizacion para los tipos clave.
-    /// Devuelve true solo si TODOS los tipos clave estan en `.sharingAuthorized`.
-    /// Un tipo en `.notDetermined` significa que el usuario aun no ha visto el prompt
-    /// o lo ha denegado sin decidir.
-    static func checkAuthorizationStatus(store: HKHealthStore) -> Bool {
-        for id in keyTypes {
-            guard let type = HKQuantityType.quantityType(forIdentifier: id) else { continue }
-            let status = store.authorizationStatus(for: type)
-            guard status == .sharingAuthorized else { return false }
+    /// Comprueba el estado REAL de autorizacion.
+    ///
+    /// Para tipos de ESCRITURA usamos `authorizationStatus(for:)` (refleja el estado
+    /// real: .sharingAuthorized / .sharingDenied / .notDetermined).
+    ///
+    /// Para tipos de LECTURA Apple oculta el estado real por privacidad: devuelve
+    /// siempre .notDetermined. En su lugar usamos `statusForAuthorizationRequest`,
+    /// que devuelve:
+    ///   - .shouldRequest: el sheet se mostraria si llamamos a requestAuthorization
+    ///     (es decir, el usuario aun no ha sido preguntado o revoco todo).
+    ///   - .unnecessary: ya se ha preguntado (no se volvera a mostrar el sheet).
+    ///     Asumimos conectado; los queries devolveran 0 si el usuario denego.
+    ///   - .unknown: error.
+    ///
+    /// Devuelve true solo si los tipos de escritura clave estan autorizados y
+    /// los tipos de lectura ya han sido preguntados.
+    static func checkAuthorizationStatus(store: HKHealthStore, readTypes: Set<HKObjectType>? = nil) async -> Bool {
+        // Escritura: estado real reflejado por authorizationStatus(for:).
+        // No tenemos tipos clave de escritura obligatorios (todos opcionales),
+        // asi que no bloqueamos por write aqui.
+
+        // Lectura: usar statusForAuthorizationRequest (iOS 12+).
+        // Si el caller pasa readTypes, los usamos; si no, usamos un conjunto
+        // minimo representativo.
+        let types = readTypes ?? Self.defaultReadTypes
+        guard !types.isEmpty else { return false }
+
+        do {
+            let status = try await store.statusForAuthorizationRequest(toShare: [], read: types)
+            return status == .unnecessary
+        } catch {
+            AppLogger.warning("checkAuthorizationStatus: statusForAuthorizationRequest fallo: \(error.localizedDescription)")
+            return false
         }
-        return true
     }
 
-    /// Convenience: usa el store interno del singleton.
-    func refreshAuthorizationStatus() -> Bool {
-        let real = Self.checkAuthorizationStatus(store: store)
+    /// Conjunto minimo de tipos de lectura para comprobar si se ha preguntado.
+    /// Si statusForAuthorizationRequest devuelve .unnecessary para estos,
+    /// asumimos que el usuario ya ha visto el sheet de permisos.
+    private static let defaultReadTypes: Set<HKObjectType> = {
+        var types: Set<HKObjectType> = []
+        let keyReadTypes: [HKQuantityTypeIdentifier] = [
+            .stepCount, .heartRate, .activeEnergyBurned,
+        ]
+        for id in keyReadTypes {
+            if let t = HKQuantityType.quantityType(forIdentifier: id) {
+                types.insert(t)
+            }
+        }
+        return types
+    }()
+
+    /// Version async (recomendada). Comprueba write + read correctamente.
+    func refreshAuthorizationStatusAsync() async -> Bool {
+        let real = await Self.checkAuthorizationStatus(store: store, readTypes: readTypes)
         isAuthorized = real
         return real
     }
@@ -112,13 +146,16 @@ final class HealthKitManager: ObservableObject {
     /// `requestAuthorization(toShare:read:)`.
     func ensureAuthorizationPrompted() async {
         let store = HKHealthStore()
+        // Comprobamos si ya se ha preguntado usando statusForAuthorizationRequest
+        // (authorizationStatus(for:) no sirve para read: siempre .notDetermined).
+        let types = readTypes
         var needsPrompt = false
-        for id in HealthKitManager.keyTypes {
-            guard let type = HKQuantityType.quantityType(forIdentifier: id) else { continue }
-            if store.authorizationStatus(for: type) == .notDetermined {
-                needsPrompt = true
-                break
-            }
+        do {
+            let status = try await store.statusForAuthorizationRequest(toShare: [], read: types)
+            needsPrompt = (status == .shouldRequest)
+        } catch {
+            AppLogger.warning("ensureAuthorizationPrompted: no se pudo comprobar status: \(error.localizedDescription)")
+            needsPrompt = true
         }
         if needsPrompt {
             do {
@@ -127,7 +164,7 @@ final class HealthKitManager: ObservableObject {
                 AppLogger.warning("ensureAuthorizationPrompted fallo: \(error.localizedDescription)")
             }
         }
-        isAuthorized = Self.checkAuthorizationStatus(store: store)
+        isAuthorized = await Self.checkAuthorizationStatus(store: store, readTypes: readTypes)
     }
 
     /// Sincroniza los últimos N días de HealthKit a Supabase vía Edge Function.
