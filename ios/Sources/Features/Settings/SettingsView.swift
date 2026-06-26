@@ -313,6 +313,9 @@ struct SettingsView: View {
         switch goal {
         case "lose_weight": return "Perder peso"
         case "gain_muscle": return "Ganar peso/músculo"
+        case "recomposition": return "Recomposición"
+        case "performance": return "Rendimiento"
+        case "health": return "Salud"
         default: return "Mantener"
         }
     }

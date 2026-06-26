@@ -207,6 +207,15 @@ struct OnboardingView: View {
                     ) {
                         viewModel.goal = "gain_muscle"
                     }
+                    GoalCard(
+                        icon: "scalemass.fill",
+                        title: "Recomposición",
+                        description: "Bajar grasa y subir músculo a la vez",
+                        color: .purple,
+                        isSelected: viewModel.goal == "recomposition"
+                    ) {
+                        viewModel.goal = "recomposition"
+                    }
                 }
                 .padding(.horizontal, 8)
             }
@@ -394,6 +403,7 @@ final class OnboardingViewModel: ObservableObject {
         switch goal {
         case "lose_weight": return Int(tdee - 500)
         case "gain_muscle": return Int(tdee + 300)
+        case "recomposition": return Int(tdee - 200)
         default: return Int(tdee)
         }
     }
@@ -434,6 +444,7 @@ final class OnboardingViewModel: ObservableObject {
             }
 
             struct UpdatePayload: Encodable {
+                let id: String
                 let full_name: String?
                 let birth_date: String?
                 let sex: String?
@@ -454,7 +465,10 @@ final class OnboardingViewModel: ObservableObject {
             let carbs = Int(Double(kcal) * 0.40 / 4.0)
             let fat = Int(Double(kcal) * 0.30 / 9.0)
 
+            let userId = try await SupabaseService.shared.client.auth.session.user.id.uuidString
+
             let payload = UpdatePayload(
+                id: userId,
                 full_name: fullName.isEmpty ? nil : fullName,
                 birth_date: birthDate,
                 sex: sex,
@@ -469,11 +483,9 @@ final class OnboardingViewModel: ObservableObject {
                 onboarded_at: ISO8601DateFormatter().string(from: Date())
             )
 
-            let userId = try await SupabaseService.shared.client.auth.session.user.id.uuidString
             try await SupabaseService.shared.client
                 .from("profiles")
-                .upsert(payload)
-                .eq("id", value: userId)
+                .upsert(payload, onConflict: "id")
                 .execute()
 
             // Recargar perfil en auth
