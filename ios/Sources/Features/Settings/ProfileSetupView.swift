@@ -15,7 +15,7 @@ struct ProfileSetupView: View {
     @State private var heightString: String = ""
     @State private var weightString: String = ""
     @State private var targetWeightString: String = ""
-    @State private var activityLevel: String = "moderate"
+    @State private var activityLevel: String = "moderately_active"
     @State private var goal: String = "maintain"
     @State private var dietaryStyle: String = ""
     @State private var allergens: String = ""
@@ -79,15 +79,18 @@ struct ProfileSetupView: View {
                 Section("Actividad y objetivo") {
                     Picker("Nivel de actividad", selection: $activityLevel) {
                         Text("Sedentario").tag("sedentary")
-                        Text("Ligero").tag("light")
-                        Text("Moderado").tag("moderate")
-                        Text("Activo").tag("active")
-                        Text("Muy activo").tag("very_active")
+                        Text("Ligero").tag("lightly_active")
+                        Text("Moderado").tag("moderately_active")
+                        Text("Activo").tag("very_active")
+                        Text("Muy activo").tag("extremely_active")
                     }
                     Picker("Objetivo", selection: $goal) {
-                        Text("Perder peso").tag("lose")
+                        Text("Perder peso").tag("lose_weight")
                         Text("Mantener").tag("maintain")
-                        Text("Ganar peso").tag("gain")
+                        Text("Ganar músculo").tag("gain_muscle")
+                        Text("Recomposición").tag("recomposition")
+                        Text("Salud").tag("health")
+                        Text("Rendimiento").tag("performance")
                     }
                 }
 
@@ -161,7 +164,7 @@ struct ProfileSetupView: View {
         if let h = p?.heightCm { heightString = String(Int(h)) }
         if let w = p?.weightKg { weightString = String(w) }
         if let tw = p?.targetWeightKg { targetWeightString = String(tw) }
-        activityLevel = p?.activityLevel ?? "moderate"
+        activityLevel = p?.activityLevel ?? "moderately_active"
         goal = p?.goal ?? "maintain"
         dietaryStyle = (p?.dietaryStyle ?? []).joined(separator: ", ")
         allergens = (p?.allergens ?? []).joined(separator: ", ")

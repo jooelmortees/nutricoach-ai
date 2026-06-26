@@ -185,9 +185,9 @@ struct OnboardingView: View {
                         title: "Perder peso",
                         description: "Déficit calórico moderado (~500 kcal/día)",
                         color: .red,
-                        isSelected: viewModel.goal == "lose"
+                        isSelected: viewModel.goal == "lose_weight"
                     ) {
-                        viewModel.goal = "lose"
+                        viewModel.goal = "lose_weight"
                     }
                     GoalCard(
                         icon: "equal.circle.fill",
@@ -203,9 +203,9 @@ struct OnboardingView: View {
                         title: "Ganar peso/músculo",
                         description: "Superávit calórico (~300 kcal/día)",
                         color: .blue,
-                        isSelected: viewModel.goal == "gain"
+                        isSelected: viewModel.goal == "gain_muscle"
                     ) {
-                        viewModel.goal = "gain"
+                        viewModel.goal = "gain_muscle"
                     }
                 }
                 .padding(.horizontal, 8)
@@ -392,8 +392,8 @@ final class OnboardingViewModel: ObservableObject {
         let tdee = bmr * 1.55
         // Ajuste por objetivo
         switch goal {
-        case "lose": return Int(tdee - 500)
-        case "gain": return Int(tdee + 300)
+        case "lose_weight": return Int(tdee - 500)
+        case "gain_muscle": return Int(tdee + 300)
         default: return Int(tdee)
         }
     }
@@ -460,7 +460,7 @@ final class OnboardingViewModel: ObservableObject {
                 sex: sex,
                 height_cm: Double(heightString),
                 weight_kg: Double(weightString),
-                activity_level: "moderate",
+                activity_level: "moderately_active",
                 goal: goal,
                 daily_kcal_target: kcal,
                 daily_protein_g: protein,

@@ -311,8 +311,8 @@ struct SettingsView: View {
 
     private func goalLabel(_ goal: String) -> String {
         switch goal {
-        case "lose": return "Perder peso"
-        case "gain": return "Ganar peso/músculo"
+        case "lose_weight": return "Perder peso"
+        case "gain_muscle": return "Ganar peso/músculo"
         default: return "Mantener"
         }
     }
