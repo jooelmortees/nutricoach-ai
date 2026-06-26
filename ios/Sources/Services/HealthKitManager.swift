@@ -223,20 +223,30 @@ final class HealthKitManager: ObservableObject {
     ///   - force: si true, ignora `lastSyncAt` y sincroniza siempre. Usar en
     ///     onboarding (primera conexion) y en el boton manual de Settings.
     func syncToBackend(days: Int = 7, force: Bool = false) async {
+        AppLogger.info("syncToBackend: inicio (days=\(days), force=\(force), isSyncing=\(isSyncing), isAuthorized=\(isAuthorized))")
+
         // Si ya hay una sincronizacion en curso, no lanzar otra en paralelo
-        if isSyncing { return }
+        if isSyncing {
+            AppLogger.info("syncToBackend: omitido, ya hay sync en curso")
+            return
+        }
 
         // Si no hay autorizacion real, no intentamos leer HK
         guard isAuthorized else {
-            AppLogger.warning("HealthKit sync omitido: sin autorizacion")
-            return
+            // Re-comprobar autorizacion aqui por si acaso
+            let rechecked = await Self.checkAuthorizationStatus(store: store, readTypes: readTypes)
+            isAuthorized = rechecked
+            guard rechecked else {
+                AppLogger.warning("syncToBackend: omitido, sin autorizacion (re-checked: \(rechecked))")
+                return
+            }
         }
 
         // Throttling: si la ultima sync fue hace <1h y no es forzada, saltar
         if !force, let last = UserDefaults.standard.object(forKey: Self.lastSyncKey) as? Date {
             let elapsed = Date().timeIntervalSince(last)
             if elapsed < 3600 {
-                AppLogger.info("HealthKit sync omitido: ultima sync hace \(Int(elapsed))s")
+                AppLogger.info("syncToBackend: omitido por throttle, ultima sync hace \(Int(elapsed))s")
                 return
             }
         }
@@ -249,9 +259,10 @@ final class HealthKitManager: ObservableObject {
             let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
 
             let metrics = try await collectMetrics(from: start, to: end)
+            AppLogger.info("syncToBackend: \(metrics.count) metricas recogidas")
 
             guard !metrics.isEmpty else {
-                AppLogger.info("HealthKit sync: 0 muestras en ventana")
+                AppLogger.info("syncToBackend: 0 muestras en ventana")
                 UserDefaults.standard.set(Date(), forKey: Self.lastSyncKey)
                 lastError = nil
                 return
@@ -269,9 +280,11 @@ final class HealthKitManager: ObservableObject {
             let (data, response) = try await URLSession.shared.data(for: req)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 let body = String(data: data, encoding: .utf8) ?? "?"
+                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                AppLogger.warning("syncToBackend: error HTTP \(code): \(body)")
                 throw HealthKitError.syncFailed(body)
             }
-            AppLogger.info("HealthKit sync OK: \(metrics.count) metricas")
+            AppLogger.info("syncToBackend: OK \(metrics.count) metricas enviadas")
             UserDefaults.standard.set(Date(), forKey: Self.lastSyncKey)
             lastError = nil
         } catch {

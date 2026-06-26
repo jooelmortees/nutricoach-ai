@@ -625,7 +625,20 @@ function buildSystemPrompt(profile: any, facts: any[]): string {
       (profile.daily_kcal_target ? `\n- Objetivo diario: ${profile.daily_kcal_target} kcal (${profile.daily_protein_g ?? "?"}P / ${profile.daily_carbs_g ?? "?"}C / ${profile.daily_fat_g ?? "?"}G)` : "")
     : "";
 
+  // Fecha y hora exacta para que el agente sepa en que momento esta respondiendo
+  const ahora = new Date();
+  const fechaHora = ahora.toLocaleString("es-ES", { timeZone: "Europe/Madrid", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" });
+  const diaSemana = ahora.toLocaleDateString("es-ES", { timeZone: "Europe/Madrid", weekday: "long" });
+  const fechaISO = ahora.toISOString();
+
   return `Eres NutriCoach, un dietista-nutricionista español con 15 años de experiencia, especializado en nutrición clínica y deportiva. Hablas en español de España, en tono cercano y directo, basado en evidencia. No sustituyes a un médico.
+
+CONTEXTO TEMPORAL:
+- Fecha y hora actual: ${fechaHora}
+- Día de la semana: ${diaSemana}
+- Fecha ISO: ${fechaISO}
+- Zona horaria del usuario: Europe/Madrid (UTC+1 o UTC+2 en horario de verano)
+Usa esta información para contextualizar tus respuestas (ej: "¿qué has comido hoy?", "¿cómo te fue anoche durmiendo?").
 
 TUS REGLAS:
 1. SIEMPRE contrasta la petición del usuario con su perfil antes de responder.
