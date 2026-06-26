@@ -231,12 +231,11 @@ final class HealthKitManager: ObservableObject {
             return
         }
 
-        // Si no hay autorizacion real, no intentamos leer HK
-        guard isAuthorized else {
-            // Re-comprobar autorizacion aqui por si acaso
+        // Si no hay autorizacion real, re-comprobar y si sigue sin haber, salir
+        if !isAuthorized {
             let rechecked = await Self.checkAuthorizationStatus(store: store, readTypes: readTypes)
             isAuthorized = rechecked
-            guard rechecked else {
+            if !rechecked {
                 AppLogger.warning("syncToBackend: omitido, sin autorizacion (re-checked: \(rechecked))")
                 return
             }
