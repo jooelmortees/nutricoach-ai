@@ -253,8 +253,10 @@ final class HealthKitManager: ObservableObject {
         isSyncing = true
         defer { isSyncing = false }
 
-        do {
-            let end = Date()
+        // Limpiar errores previos al iniciar una sync nueva
+        lastError = nil
+
+        do {            let end = Date()
             let start = Calendar.current.date(byAdding: .day, value: -days, to: end) ?? end
 
             let metrics = try await collectMetrics(from: start, to: end)
@@ -315,8 +317,14 @@ final class HealthKitManager: ObservableObject {
             .appleExerciseTime, .appleMoveTime, .appleStandTime,
         ]
         for id in cumulativeTypes {
-            let samples = try await queryAggregatedByDay(id: id, from: start, to: end, strategy: .sum)
-            out.append(contentsOf: samples)
+            do {
+                let samples = try await queryAggregatedByDay(id: id, from: start, to: end, strategy: .sum)
+                out.append(contentsOf: samples)
+            } catch {
+                // No todos los tipos estan disponibles en todos los dispositivos.
+                // Si uno falla (ej: appleExerciseTime sin Watch), continuamos con los demas.
+                AppLogger.info("collectMetrics: tipo \(id.rawValue) omitido: \(error.localizedDescription)")
+            }
         }
 
         // Tipos instantaneos: ultimo valor del dia
@@ -325,13 +333,21 @@ final class HealthKitManager: ObservableObject {
             .bodyFatPercentage, .oxygenSaturation, .respiratoryRate,
         ]
         for id in instantTypes {
-            let samples = try await queryAggregatedByDay(id: id, from: start, to: end, strategy: .last)
-            out.append(contentsOf: samples)
+            do {
+                let samples = try await queryAggregatedByDay(id: id, from: start, to: end, strategy: .last)
+                out.append(contentsOf: samples)
+            } catch {
+                AppLogger.info("collectMetrics: tipo \(id.rawValue) omitido: \(error.localizedDescription)")
+            }
         }
 
         // Sueño (agrega por dia, igual que los demas)
-        let sleep = try await querySleep(from: start, to: end)
-        out.append(contentsOf: sleep)
+        do {
+            let sleep = try await querySleep(from: start, to: end)
+            out.append(contentsOf: sleep)
+        } catch {
+            AppLogger.info("collectMetrics: sueno omitido: \(error.localizedDescription)")
+        }
         return out
     }
 
@@ -402,8 +418,18 @@ final class HealthKitManager: ObservableObject {
                         quantitySamplePredicate: predicate,
                         options: .cumulativeSum
                     ) { _, stats, error in
+                        // errorNoData = "No data available for the specified predicate"
+                        // No es un error real, significa que no hay datos para ese dia.
+                        // Lo tratamos como nil (sin datos) siguiendo el patron canónico
+                        // de react-native-healthkit, tryVital, PhoneClaw, flutter_health_fit.
                         if let error = error {
-                            continuation.resume(throwing: error)
+                            let nsError = error as NSError
+                            if nsError.domain == HKError.errorDomain,
+                               nsError.code == HKError.Code.errorNoData.rawValue {
+                                continuation.resume(returning: nil)
+                            } else {
+                                continuation.resume(throwing: error)
+                            }
                             return
                         }
                         continuation.resume(returning: stats?.sumQuantity()?.doubleValue(for: unit))
@@ -417,8 +443,15 @@ final class HealthKitManager: ObservableObject {
                         limit: 1,
                         sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)]
                     ) { _, samples, error in
+                        // Mismo tratamiento para errorNoData
                         if let error = error {
-                            continuation.resume(throwing: error)
+                            let nsError = error as NSError
+                            if nsError.domain == HKError.errorDomain,
+                               nsError.code == HKError.Code.errorNoData.rawValue {
+                                continuation.resume(returning: nil)
+                            } else {
+                                continuation.resume(throwing: error)
+                            }
                             return
                         }
                         let last = (samples as? [HKQuantitySample])?.first
@@ -493,7 +526,13 @@ final class HealthKitManager: ObservableObject {
                     sortDescriptors: nil
                 ) { _, samples, error in
                     if let error = error {
-                        continuation.resume(throwing: error)
+                        let nsError = error as NSError
+                        if nsError.domain == HKError.errorDomain,
+                           nsError.code == HKError.Code.errorNoData.rawValue {
+                            continuation.resume(returning: [])
+                        } else {
+                            continuation.resume(throwing: error)
+                        }
                         return
                     }
                     continuation.resume(returning: (samples as? [HKCategorySample]) ?? [])
