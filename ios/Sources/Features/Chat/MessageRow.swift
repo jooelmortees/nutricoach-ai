@@ -7,7 +7,7 @@ import SwiftUI
 struct MessageRow: View {
     let message: ChatMessage
     let onImageTap: (String) -> Void
-    let onSaveMeal: (PendingMeal) -> Void
+    let onSaveMeal: (PendingMeal) async -> Bool
     /// Callback para "Regenerar" (solo en el ultimo mensaje del asistente).
     var onRegenerate: (() -> Void)? = nil
     /// Callback para "Reintentar" (solo si el mensaje fallo).
@@ -244,7 +244,7 @@ private struct TextBubble: View {
     let text: String
     let role: ChatMessage.Role
     let isStreaming: Bool
-    let onSaveMeal: (PendingMeal) -> Void
+    let onSaveMeal: (PendingMeal) async -> Bool
 
     @State private var dots: Int = 1
     private let timer = Timer.publish(every: 0.45, on: .main, in: .common).autoconnect()
@@ -275,7 +275,7 @@ private struct TextBubble: View {
                     }
                     // Tarjeta de macros
                     MacrosCard(meal: macros, onSave: { editedMeal in
-                        onSaveMeal(editedMeal)
+                        await onSaveMeal(editedMeal)
                     })
                 }
             } else {
@@ -341,12 +341,12 @@ private struct MarkdownText: View {
 
 private struct MacrosCard: View {
     let meal: PendingMeal
-    let onSave: (PendingMeal) -> Void
+    let onSave: (PendingMeal) async -> Bool
     @State private var saved = false
     @State private var showEditor = false
     @State private var editableMeal: PendingMeal
 
-    init(meal: PendingMeal, onSave: @escaping (PendingMeal) -> Void) {
+    init(meal: PendingMeal, onSave: @escaping (PendingMeal) async -> Bool) {
         self.meal = meal
         self.onSave = onSave
         self._editableMeal = State(initialValue: meal)
@@ -395,11 +395,11 @@ private struct MacrosCard: View {
                 MealEditorSheet(
                     meal: $editableMeal,
                     onSave: { editedMeal in
-                        onSave(editedMeal)
-                        await MainActor.run {
-                            saved = true
+                        let ok = await onSave(editedMeal)
+                        if ok {
+                            await MainActor.run { saved = true }
                         }
-                        return true
+                        return ok
                     }
                 )
             }

@@ -227,14 +227,15 @@ final class ChatViewModel: ObservableObject {
     /// - `carbs_g`      -> `total_carbs_g`
     /// - `fat_g`        -> `total_fat_g`
     /// - `confidence`   -> `notes` (text, guarda el score)
-    func saveMeal(_ meal: PendingMeal) async {
+    @discardableResult
+    func saveMeal(_ meal: PendingMeal) async -> Bool {
         // 1. Obtener userId del cliente Supabase (sesion activa)
         let userId: String
         do {
             userId = try await SupabaseService.shared.client.auth.session.user.id.uuidString
         } catch {
             errorMessage = "Error de sesion: \(error.localizedDescription)"
-            return
+            return false
         }
 
         // 2. Insertar en meals con los nombres REALES de columnas
@@ -255,7 +256,11 @@ final class ChatViewModel: ObservableObject {
         if let conf = meal.confidence {
             notesParts.append("confidence=\(conf)")
         }
-        notesParts.append("source=text")
+        if let ings = meal.ingredients, !ings.isEmpty {
+            let ingsStr = ings.map { "\($0.name):\($0.quantity ?? 0)\($0.unit)" }.joined(separator: ", ")
+            notesParts.append("ingredients=\(ingsStr)")
+        }
+        notesParts.append("source=ai")
         let notes = notesParts.joined(separator: " ")
 
         let payload = InsertPayload(
@@ -266,7 +271,7 @@ final class ChatViewModel: ObservableObject {
             total_protein_g: meal.protein_g,
             total_carbs_g: meal.carbs_g,
             total_fat_g: meal.fat_g,
-            source: "text",
+            source: "ai_suggestion",
             notes: notes
         )
 
@@ -280,8 +285,10 @@ final class ChatViewModel: ObservableObject {
                 role: .assistant,
                 content: "Guardado: **\(meal.description)** en tu registro de comidas del dia."
             ))
+            return true
         } catch {
             errorMessage = "Error guardando comida: \(error.localizedDescription)"
+            return false
         }
     }
 

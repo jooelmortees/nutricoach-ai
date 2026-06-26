@@ -90,7 +90,7 @@ struct ChatView: View {
                             message: msg,
                             onImageTap: { url in fullscreenImageURL = url },
                             onSaveMeal: { meal in
-                                Task { await viewModel.saveMeal(meal) }
+                                await viewModel.saveMeal(meal)
                             },
                             onRegenerate: isLastAssistant(index: index) ? {
                                 Task { await viewModel.regenerateLastResponse() }

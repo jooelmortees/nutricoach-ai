@@ -472,7 +472,7 @@ final class OnboardingViewModel: ObservableObject {
             let userId = try await SupabaseService.shared.client.auth.session.user.id.uuidString
             try await SupabaseService.shared.client
                 .from("profiles")
-                .update(payload)
+                .upsert(payload)
                 .eq("id", value: userId)
                 .execute()
 

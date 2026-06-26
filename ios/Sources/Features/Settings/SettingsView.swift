@@ -338,7 +338,10 @@ struct SettingsView: View {
     }
 
     private func saveTargets() async {
-        guard let userId = auth.profile?.id.uuidString else { return }
+        guard let userId = auth.profile?.id.uuidString else {
+            healthKitError = "No hay perfil. Cierra sesión y vuelve a entrar."
+            return
+        }
         let kcal = Int(kcalTarget) ?? 0
         let protein = Int(proteinTarget) ?? 0
         let carbs = Int(carbsTarget) ?? 0
@@ -351,7 +354,7 @@ struct SettingsView: View {
                     "daily_protein_g": protein,
                     "daily_carbs_g": carbs,
                     "daily_fat_g": fat
-                ])
+                ] as [String: Int])
                 .eq("id", value: userId)
                 .execute()
             // Refrescar el perfil en AuthManager

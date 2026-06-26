@@ -242,8 +242,10 @@ final class DashboardViewModel: ObservableObject {
         hasAuthorizedHealthKit = authorized
 
         // Solo sincronizar si hay autorizacion REAL
+        // force: true para que siempre sincronice al entrar en la pestaña
+        // (sin esperar al throttle de 1h)
         if authorized {
-            await HealthKitManager.shared.syncToBackend(days: 7)
+            await HealthKitManager.shared.syncToBackend(days: 7, force: true)
         }
         await loadMetrics()
         await loadTodaysKcal()
