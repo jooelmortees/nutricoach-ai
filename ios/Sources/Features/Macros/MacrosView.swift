@@ -45,11 +45,36 @@ struct MacrosSummaryCards: View {
 
     var body: some View {
         let t = viewModel.totals
+        let p = viewModel.profile
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-            MacroCard(title: "Calorías", value: "\(Int(t.kcal))", unit: "kcal", icon: "flame.fill", color: Color.orange)
-            MacroCard(title: "Proteínas", value: "\(Int(t.protein))", unit: "g", icon: "figure.strengthtraining.traditional", color: Color.red)
-            MacroCard(title: "Carbohidratos", value: "\(Int(t.carbs))", unit: "g", icon: "leaf.fill", color: Color.green)
-            MacroCard(title: "Grasas", value: "\(Int(t.fat))", unit: "g", icon: "drop.fill", color: Color.yellow)
+            MacroRingCard(
+                title: "Calorías",
+                current: t.kcal,
+                target: p?.dailyKcalTarget,
+                unit: "kcal",
+                color: .orange
+            )
+            MacroRingCard(
+                title: "Proteínas",
+                current: t.protein,
+                target: p?.dailyProteinG,
+                unit: "g",
+                color: .red
+            )
+            MacroRingCard(
+                title: "Carbohidratos",
+                current: t.carbs,
+                target: p?.dailyCarbsG,
+                unit: "g",
+                color: .green
+            )
+            MacroRingCard(
+                title: "Grasas",
+                current: t.fat,
+                target: p?.dailyFatG,
+                unit: "g",
+                color: .yellow
+            )
         }
     }
 }
@@ -111,25 +136,76 @@ struct MealsListView: View {
     }
 }
 
-struct MacroCard: View {
+struct MacroRingCard: View {
     let title: String
-    let value: String
+    let current: Double
+    let target: Int?
     let unit: String
-    let icon: String
     let color: Color
 
+    private var progress: Double {
+        guard let target, target > 0 else { return 0 }
+        return min(current / Double(target), 1.0)
+    }
+
+    private var exceeded: Bool {
+        guard let target, target > 0 else { return false }
+        return current > Double(target)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: icon)
-                .font(.title2)
-                .foregroundStyle(color)
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(value).font(.title2).bold()
-                Text(unit).font(.caption).foregroundStyle(.secondary)
+        VStack(spacing: 8) {
+            ZStack {
+                Circle()
+                    .stroke(color.opacity(0.15), lineWidth: 8)
+                    .frame(width: 72, height: 72)
+                Circle()
+                    .trim(from: 0, to: exceeded ? 1.0 : progress)
+                    .stroke(
+                        color,
+                        style: StrokeStyle(lineWidth: 8, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 72, height: 72)
+                VStack(spacing: 0) {
+                    Text("\(Int(current))")
+                        .font(.title3)
+                        .bold()
+                        .foregroundStyle(exceeded ? .red : color)
+                    if let target {
+                        Text("/ \(target)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
-            Text(title).font(.caption).foregroundStyle(.secondary)
+
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let target {
+                let remaining = max(target - Int(current), 0)
+                if remaining > 0 {
+                    Text("Quedan \(remaining) \(unit)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if exceeded {
+                    Text("+\(Int(current) - target) \(unit)")
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                } else {
+                    Text("Objetivo alcanzado")
+                        .font(.caption2)
+                        .foregroundStyle(.green)
+                }
+            } else {
+                Text("Sin objetivo")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
         .padding()
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
     }

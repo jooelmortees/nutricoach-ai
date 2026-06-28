@@ -43,7 +43,7 @@ struct Profile: Codable, Identifiable {
         case dailyKcalTarget = "daily_kcal_target"
         case dailyProteinG = "daily_protein_g"
         case dailyCarbsG = "daily_carbs_g"
-        case dailyFatG = "daily_fat_target"
+        case dailyFatG = "daily_fat_g"
         case dietaryStyle = "dietary_style"
         case allergens
         case restrictions
