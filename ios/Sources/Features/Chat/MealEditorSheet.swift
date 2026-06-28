@@ -2,11 +2,16 @@
 // MealEditorSheet - editor visual de PendingMeal con estados
 // ============================================================
 //
-// Flujo: la IA genera un JSON de macros -> el usuario lo revisa,
-// edita si algo no cuadra y guarda. Tres estados:
-//   .editing  -> formulario editable + boton "Guardar"
-//   .saving   -> ProgressView + texto "Guardando..."
-//   .saved    -> check + "Guardado correctamente" + boton "Editar"
+// Flujo: la IA genera un JSON con macros + ingredientes -> el usuario
+// edita los ingredientes (no las macros) -> al guardar se manda a la
+// IA que recalcule las macros desde los ingredientes editados ->
+// se muestran las macros actualizadas -> se guarda en la BD.
+//
+// Estados:
+//   .editing       -> formulario editable (ingredientes) + macros read-only
+//   .recalculating -> ProgressView mientras la IA recalcula
+//   .saving        -> ProgressView mientras se guarda en la BD
+//   .saved         -> check + resumen + boton Editar
 
 import SwiftUI
 
@@ -20,6 +25,7 @@ struct MealEditorSheet: View {
 
     private enum SavePhase {
         case editing
+        case recalculating
         case saving
         case saved
     }
@@ -30,6 +36,8 @@ struct MealEditorSheet: View {
                 switch phase {
                 case .editing:
                     editingContent
+                case .recalculating:
+                    recalculatingContent
                 case .saving:
                     savingContent
                 case .saved:
@@ -53,18 +61,19 @@ struct MealEditorSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
-        .interactiveDismissDisabled(phase == .saving)
+        .interactiveDismissDisabled(phase == .recalculating || phase == .saving)
     }
 
     private var navigationTitle: String {
         switch phase {
         case .editing: return "Revisar comida"
+        case .recalculating: return "Recalculando"
         case .saving: return "Guardando"
         case .saved: return "Guardado"
         }
     }
 
-    // MARK: - Editing
+    // MARK: - Editing (macros read-only, ingredientes editables)
 
     private var editingContent: some View {
         Form {
@@ -82,28 +91,21 @@ struct MealEditorSheet: View {
                 }
             }
 
-            Section("Macros") {
+            // Macros en read-only: se recalculan desde los ingredientes
+            Section {
                 HStack {
-                    macroField(label: "Kcal", value: Binding(
-                        get: { String(format: "%.0f", meal.kcal ?? 0) },
-                        set: { meal.kcal = Double($0.replacingOccurrences(of: ",", with: ".")) }
-                    ), unit: "kcal")
+                    macroDisplay(label: "Kcal", value: meal.kcal ?? 0, unit: "kcal", color: .orange)
+                    macroDisplay(label: "Proteína", value: meal.protein_g ?? 0, unit: "g", color: .red)
+                    macroDisplay(label: "Carbos", value: meal.carbs_g ?? 0, unit: "g", color: .green)
+                    macroDisplay(label: "Grasas", value: meal.fat_g ?? 0, unit: "g", color: .yellow)
                 }
+            } header: {
                 HStack {
-                    macroField(label: "Proteínas", value: Binding(
-                        get: { String(format: "%.0f", meal.protein_g ?? 0) },
-                        set: { meal.protein_g = Double($0.replacingOccurrences(of: ",", with: ".")) }
-                    ), unit: "g")
-                    macroField(label: "Carbos", value: Binding(
-                        get: { String(format: "%.0f", meal.carbs_g ?? 0) },
-                        set: { meal.carbs_g = Double($0.replacingOccurrences(of: ",", with: ".")) }
-                    ), unit: "g")
-                }
-                HStack {
-                    macroField(label: "Grasas", value: Binding(
-                        get: { String(format: "%.0f", meal.fat_g ?? 0) },
-                        set: { meal.fat_g = Double($0.replacingOccurrences(of: ",", with: ".")) }
-                    ), unit: "g")
+                    Text("Macros estimados")
+                    Spacer()
+                    Text("(se recalculan al guardar)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -138,20 +140,12 @@ struct MealEditorSheet: View {
             Section {
                 Button {
                     Task {
-                        phase = .saving
-                        saveError = nil
-                        let ok = await onSave(meal)
-                        if ok {
-                            phase = .saved
-                        } else {
-                            saveError = "No se pudo guardar. Inténtalo de nuevo."
-                            phase = .editing
-                        }
+                        await recalculateAndSave()
                     }
                 } label: {
                     HStack {
-                        Image(systemName: "checkmark.circle.fill")
-                        Text("Guardar comida")
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                        Text("Recalcular y guardar")
                     }
                     .frame(maxWidth: .infinity)
                     .bold()
@@ -160,18 +154,37 @@ struct MealEditorSheet: View {
         }
     }
 
-    private func macroField(label: String, value: Binding<String>, unit: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            TextField("0", text: value)
-                .keyboardType(.decimalPad)
-                .multilineTextAlignment(.trailing)
+    private func macroDisplay(label: String, value: Double, unit: String, color: Color) -> some View {
+        VStack(spacing: 4) {
+            Text("\(Int(value))")
+                .font(.headline)
+                .foregroundStyle(color)
             Text(unit)
-                .font(.caption)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(label)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: - Recalculating
+
+    private var recalculatingContent: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .scaleEffect(1.5)
+            Text("Calculando macros con la IA...")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+            Text("A partir de los ingredientes editados")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Saving
@@ -232,6 +245,78 @@ struct MealEditorSheet: View {
         .padding()
     }
 
+    // MARK: - Lógica
+
+    /// Llama a la edge function recalculate-macros con los ingredientes editados,
+    /// actualiza las macros del meal y luego guarda en la BD.
+    private func recalculateAndSave() async {
+        saveError = nil
+        phase = .recalculating
+
+        do {
+            let recalculated = try await callRecalculateMacros()
+            // Actualizar las macros del meal con los valores recalculados
+            meal.kcal = recalculated.kcal
+            meal.protein_g = recalculated.protein_g
+            meal.carbs_g = recalculated.carbs_g
+            meal.fat_g = recalculated.fat_g
+            if let newName = recalculated.description, !newName.isEmpty {
+                meal.description = newName
+            }
+
+            // Ahora guardar en la BD
+            phase = .saving
+            let ok = await onSave(meal)
+            if ok {
+                phase = .saved
+            } else {
+                saveError = "No se pudo guardar. Inténtalo de nuevo."
+                phase = .editing
+            }
+        } catch {
+            saveError = "Error recalculando: \(error.localizedDescription)"
+            phase = .editing
+        }
+    }
+
+    /// Llama a la edge function recalculate-macros y devuelve los macros calculados.
+    private func callRecalculateMacros() async throws -> RecalculatedMacros {
+        let url = Config.supabaseURL.appending(path: "functions/v1/recalculate-macros")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(try await getAccessToken())", forHTTPHeaderField: "Authorization")
+        req.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+
+        let body: [String: Any] = [
+            "name": meal.description,
+            "meal_type": meal.meal_type ?? "other",
+            "ingredients": (meal.ingredients ?? []).map { ing in
+                [
+                    "name": ing.name,
+                    "quantity": ing.quantity ?? 0,
+                    "unit": ing.unit
+                ] as [String: Any]
+            }
+        ]
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? "?"
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw MealEditorError.recalculateFailed("HTTP \(code): \(body)")
+        }
+
+        let decoded = try JSONDecoder().decode(RecalculatedMacros.self, from: data)
+        return decoded
+    }
+
+    private func getAccessToken() async throws -> String {
+        let session = try await SupabaseService.shared.client.auth.session
+        return session.accessToken
+    }
+
     // MARK: - Ingredient bindings
 
     private func ingredientNameBinding(for ing: PendingIngredient) -> Binding<String> {
@@ -265,5 +350,34 @@ struct MealEditorSheet: View {
                 }
             }
         )
+    }
+}
+
+// MARK: - Tipos auxiliares
+
+struct RecalculatedMacros: Decodable {
+    let description: String?
+    let meal_type: String?
+    let kcal: Double?
+    let protein_g: Double?
+    let carbs_g: Double?
+    let fat_g: Double?
+    let ingredients: [RecalculatedIngredient]?
+    let confidence: Double?
+}
+
+struct RecalculatedIngredient: Decodable {
+    let name: String
+    let quantity: Double?
+    let unit: String?
+}
+
+enum MealEditorError: LocalizedError {
+    case recalculateFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .recalculateFailed(let msg): return "Error recalculando macros: \(msg)"
+        }
     }
 }
