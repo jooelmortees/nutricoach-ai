@@ -70,7 +70,9 @@ struct PlansView: View {
                 )
             }
             .sheet(item: $selectedPlanForDetail) { plan in
-                PlanDetailView(plan: plan)
+                PlanDetailView(plan: plan, viewModel: viewModel) {
+                    selectedPlanForDetail = nil
+                }
             }
         }
     }
@@ -468,7 +470,11 @@ private struct GeneratePlanSheet: View {
 
 private struct PlanDetailView: View {
     let plan: MealPlan
+    @ObservedObject var viewModel: PlansViewModel
+    let onAction: () -> Void
+
     @State private var selectedDayIndex: Int = 0
+    @State private var showDeleteConfirm: Bool = false
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
@@ -491,8 +497,27 @@ private struct PlanDetailView: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
+
+                        // Targets de macros
+                        if let kcal = plan.plan.targetKcal {
+                            HStack(spacing: 16) {
+                                TargetPill(label: "kcal", value: "\(kcal)", color: .orange)
+                                if let p = plan.plan.targetProteinG {
+                                    TargetPill(label: "Prot", value: "\(p)g", color: .red)
+                                }
+                                if let c = plan.plan.targetCarbsG {
+                                    TargetPill(label: "Carb", value: "\(c)g", color: .blue)
+                                }
+                                if let f = plan.plan.targetFatG {
+                                    TargetPill(label: "Gras", value: "\(f)g", color: .yellow)
+                                }
+                            }
+                        }
                     }
                     .padding()
+
+                    // Botones de accion
+                    actionButtons
 
                     // Selector de dia
                     if plan.plan.days.count > 1 {
@@ -545,6 +570,67 @@ private struct PlanDetailView: View {
                     Button("Cerrar") { dismiss() }
                 }
             }
+            .confirmationDialog("¿Borrar este plan?", isPresented: $showDeleteConfirm) {
+                Button("Borrar", role: .destructive) {
+                    Task {
+                        await viewModel.deletePlan(plan)
+                        onAction()
+                        dismiss()
+                    }
+                }
+                Button("Cancelar", role: .cancel) {}
+            } message: {
+                Text("Esta acción no se puede deshacer.")
+            }
         }
+    }
+
+    @ViewBuilder
+    private var actionButtons: some View {
+        VStack(spacing: 8) {
+            if plan.status != .active {
+                Button {
+                    Task {
+                        await viewModel.activatePlan(plan)
+                        onAction()
+                        dismiss()
+                    }
+                } label: {
+                    Label("Activar plan", systemImage: "checkmark.circle.fill")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(.green, in: RoundedRectangle(cornerRadius: 12))
+                }
+            }
+
+            if plan.status == .active {
+                Button {
+                    Task {
+                        await viewModel.archivePlan(plan)
+                        onAction()
+                        dismiss()
+                    }
+                } label: {
+                    Label("Archivar", systemImage: "archivebox.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+            }
+
+            Button(role: .destructive) {
+                showDeleteConfirm = true
+            } label: {
+                Label("Borrar plan", systemImage: "trash")
+                    .font(.subheadline)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+        }
+        .padding(.horizontal)
     }
 }
