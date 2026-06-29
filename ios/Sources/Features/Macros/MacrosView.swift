@@ -142,7 +142,7 @@ struct MacroHeatmapCalendar: View {
                                 .fill(compliance.color)
                                 .frame(height: 34)
                                 .overlay {
-                                    Text("\(calendar.component(.day, from: date))
+                                    Text("\(calendar.component(.day, from: date))")
                                         .font(.caption2)
                                         .foregroundStyle(compliance == .noData ? .secondary : .white)
                                         .bold(compliance == .onTrack)
