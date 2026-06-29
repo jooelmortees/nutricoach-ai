@@ -85,7 +85,7 @@ final class PlansViewModel: ObservableObject {
                 .eq("id", value: planId)
                 .execute()
 
-            await fetchPlans()
+            try await fetchPlans()
         } catch {
             errorMessage = "Error activando plan: \(error.localizedDescription)"
         }
@@ -100,7 +100,7 @@ final class PlansViewModel: ObservableObject {
                 .update(["status": "archived", "updated_at": ISO8601DateFormatter().string(from: Date())])
                 .eq("id", value: plan.id.uuidString)
                 .execute()
-            await fetchPlans()
+            try await fetchPlans()
         } catch {
             errorMessage = "Error archivando plan: \(error.localizedDescription)"
         }
@@ -115,7 +115,7 @@ final class PlansViewModel: ObservableObject {
                 .delete()
                 .eq("id", value: plan.id.uuidString)
                 .execute()
-            await fetchPlans()
+            try await fetchPlans()
         } catch {
             errorMessage = "Error borrando plan: \(error.localizedDescription)"
         }
