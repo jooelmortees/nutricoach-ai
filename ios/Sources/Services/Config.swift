@@ -38,4 +38,9 @@ enum Config {
     static let deleteAccountURL: URL = {
         supabaseURL.appending(path: "functions/v1/delete-account")
     }()
+
+    /// URL base de la Edge Function generate-plan
+    static let generatePlanURL: URL = {
+        supabaseURL.appending(path: "functions/v1/generate-plan")
+    }()
 }

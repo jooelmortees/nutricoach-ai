@@ -530,14 +530,12 @@ async function executeTool(
         if (!weight_kg || !height_cm || !age || !sex || !activity_level || !goal) {
           return { content: "Error: faltan parametros", summary: "Error en calculate_daily_target" };
         }
-        // TMB
         let bmr: number;
         if (sex === "male") {
           bmr = 10 * weight_kg + 6.25 * height_cm - 5 * age + 5;
         } else {
           bmr = 10 * weight_kg + 6.25 * height_cm - 5 * age - 161;
         }
-        // Multiplicador de actividad
         const activityMultipliers: Record<string, number> = {
           sedentary: 1.2,
           lightly_active: 1.375,
@@ -546,7 +544,6 @@ async function executeTool(
           extremely_active: 1.9,
         };
         const tdee = bmr * (activityMultipliers[activity_level] ?? 1.55);
-        // Ajuste por objetivo
         let dailyKcal: number;
         let proteinPct: number, carbsPct: number, fatPct: number;
         switch (goal) {
@@ -577,7 +574,6 @@ async function executeTool(
         const carbsG = Math.round((dailyKcal * carbsPct) / 4);
         const fatG = Math.round((dailyKcal * fatPct) / 9);
 
-        // Guardar en el perfil del usuario
         const { error: updateError } = await supabase
           .from("profiles")
           .update({
@@ -608,6 +604,84 @@ async function executeTool(
             saved_to_profile: !updateError,
           }),
           summary: `Objetivo calculado: ${dailyKcal} kcal (${proteinG}P/${carbsG}C/${fatG}G)`
+        };
+      }
+      case "generate_meal_plan": {
+        const { type, notes } = args;
+        if (!type || (type !== "weekly" && type !== "daily")) {
+          return { content: "Error: type debe ser 'weekly' o 'daily'", summary: "Error en generate_meal_plan" };
+        }
+
+        // Generar el plan llamando a M3 con prompt de plan
+        const planPrompt = buildPlanPrompt(profile, facts, type, notes);
+        const m3Resp = await fetch(`${MINIMAX_BASE_URL}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${MINIMAX_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: MINIMAX_MODEL,
+            messages: [
+              { role: "system", content: planPrompt.system },
+              { role: "user", content: planPrompt.user },
+            ],
+            stream: false,
+            max_completion_tokens: 8192,
+            temperature: 0.7,
+            response_format: { type: "json_object" },
+          }),
+        });
+
+        if (!m3Resp.ok) {
+          const errText = await m3Resp.text();
+          return { content: `Error generando plan: M3 error ${m3Resp.status}`, summary: "Error generando plan" };
+        }
+
+        const m3Data = await m3Resp.json();
+        const content = m3Data.choices?.[0]?.message?.content ?? "";
+
+        let planData: any;
+        try {
+          const jsonStr = extractJson(content) ?? content;
+          planData = JSON.parse(jsonStr);
+        } catch (e) {
+          return { content: `Error parseando JSON del plan: ${String(e)}`, summary: "Error parseando plan" };
+        }
+
+        if (!planData.days || !Array.isArray(planData.days)) {
+          return { content: "El plan generado no tiene estructura valida (falta 'days')", summary: "Plan invalido" };
+        }
+
+        planData.type = type;
+        if (!planData.title) planData.title = type === "weekly" ? "Plan semanal" : "Plan diario";
+        if (!planData.summary) planData.summary = "";
+
+        // Guardar en meal_plans con status=draft
+        const today = new Date();
+        const weekStart = today.toISOString().split("T")[0];
+        const { data: insertedPlan, error: insertError } = await supabase
+          .from("meal_plans")
+          .insert({
+            user_id: userId,
+            week_start: weekStart,
+            plan: planData,
+            generated_by: "agent",
+            status: "draft",
+            notes: notes ?? null,
+          })
+          .select()
+          .single();
+
+        if (insertError) {
+          return { content: `Error guardando plan: ${insertError.message}`, summary: "Error guardando plan" };
+        }
+
+        const dayCount = planData.days.length;
+        const mealCount = planData.days.reduce((sum: number, d: any) => sum + (d.meals?.length ?? 0), 0);
+        return {
+          content: JSON.stringify({ ok: true, plan_id: insertedPlan?.id, plan: planData }),
+          summary: `Plan ${type === "weekly" ? "semanal" : "diario"} generado: ${dayCount} días, ${mealCount} comidas`
         };
       }
       default:
@@ -701,7 +775,7 @@ function getAgentTools() {
       type: "function",
       function: {
         name: "get_recent_meals",
-        description: "Obtiene las comidas registradas en los últimos 7 días con sus macros.",
+        description: "Obtiene las comidas registradas en los ultimos 7 dias con sus macros.",
         parameters: { type: "object", properties: {}, required: [] },
       },
     },
@@ -709,7 +783,7 @@ function getAgentTools() {
       type: "function",
       function: {
         name: "get_health_metrics",
-        description: "Obtiene las métricas de salud (peso, pasos, FC, etc.) de los últimos 7 días.",
+        description: "Obtiene las metricas de salud (peso, pasos, FC, etc.) de los ultimos 7 dias.",
         parameters: { type: "object", properties: {}, required: [] },
       },
     },
@@ -737,10 +811,10 @@ function getAgentTools() {
       type: "function",
       function: {
         name: "web_search",
-        description: "Busca información en internet (alérgenos, info nutricional actualizada, etc).",
+        description: "Busca informacion en internet (alergenos, info nutricional actualizada, etc).",
         parameters: {
           type: "object",
-          properties: { query: { type: "string", description: "Consulta de búsqueda" } },
+          properties: { query: { type: "string", description: "Consulta de busqueda" } },
           required: ["query"],
         },
       },
@@ -749,14 +823,14 @@ function getAgentTools() {
       type: "function",
       function: {
         name: "calculate_daily_target",
-        description: "Calcula las kcal diarias recomendadas y el reparto de macros (proteína, carbs, grasa) según los datos del usuario. Usa Mifflin-St Jeor. Guarda el resultado en el perfil del usuario automáticamente.",
+        description: "Calcula las kcal diarias recomendadas y el reparto de macros (proteina, carbs, grasa) segun los datos del usuario. Usa Mifflin-St Jeor. Guarda el resultado en el perfil del usuario automaticamente.",
         parameters: {
           type: "object",
           properties: {
             weight_kg: { type: "number", description: "Peso en kg" },
             height_cm: { type: "number", description: "Altura en cm" },
-            age: { type: "number", description: "Edad en años" },
-            sex: { type: "string", enum: ["male", "female"], description: "Sexo biológico" },
+            age: { type: "number", description: "Edad en anos" },
+            sex: { type: "string", enum: ["male", "female"], description: "Sexo biologico" },
             activity_level: { type: "string", enum: ["sedentary", "lightly_active", "moderately_active", "very_active", "extremely_active"], description: "Nivel de actividad" },
             goal: { type: "string", enum: ["lose_weight", "maintain", "gain_muscle", "recomposition", "health", "performance"], description: "Objetivo" },
           },
@@ -764,5 +838,90 @@ function getAgentTools() {
         },
       },
     },
+    {
+      type: "function",
+      function: {
+        name: "generate_meal_plan",
+        description: "Genera un plan de comida personalizado (semanal o diario) basado en el perfil, preferencias y restricciones del usuario. Lo guarda en la base de datos. Usar cuando el usuario pida un plan de comida, menu semanal o sugerencia de comidas.",
+        parameters: {
+          type: "object",
+          properties: {
+            type: { type: "string", enum: ["weekly", "daily"], description: "Tipo de plan: semanal (7 dias) o diario (1 dia)" },
+            notes: { type: "string", description: "Notas o preferencias adicionales del usuario para el plan (opcional)" },
+          },
+          required: ["type"],
+        },
+      },
+    },
   ];
+}
+
+/// Construye el system + user prompt para generar un plan de comida.
+function buildPlanPrompt(profile: any, facts: any[], type: string, notes?: string): { system: string; user: string } {
+  const profileText = profile
+    ? `PERFIL DEL USUARIO:
+- Objetivo: ${profile.goal ?? "no indicado"}
+- Peso: ${profile.weight_kg ?? "?"} kg
+- Altura: ${profile.height_cm ?? "?"} cm
+- Objetivo diario: ${profile.daily_kcal_target ?? "?"} kcal
+- Macros: ${profile.daily_protein_g ?? "?"}P / ${profile.daily_carbs_g ?? "?"}C / ${profile.daily_fat_g ?? "?"}G
+- Nivel de actividad: ${profile.activity_level ?? "no indicado"}
+- Estilo dietetico: ${(profile.dietary_style ?? []).join(", ") || "no indicado"}
+- Alergenos: ${(profile.allergens ?? []).join(", ") || "ninguno"}
+- Restricciones: ${(profile.restrictions ?? []).join(", ") || "ninguna"}
+- Habilidad cocinando: ${profile.cooking_skill ?? "no indicado"}`
+    : "PERFIL: (usuario sin perfil configurado)";
+
+  const factsText = facts.length
+    ? `\n\nHECHOS DEL USUARIO:\n${facts.map((f) => `- [${f.category}] ${f.fact}`).join("\n")}`
+    : "";
+
+  const notesText = notes ? `\n\nNOTAS: ${notes}` : "";
+
+  const dias = type === "weekly"
+    ? `"lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"`
+    : `"hoy"`;
+
+  const system = `Eres NutriCoach, un dietista-nutricionista espanol experto. Generas planes de comida personalizados.
+
+${profileText}${factsText}${notesText}
+
+Genera un plan de comida ${type === "weekly" ? "semanal (7 dias)" : "diario (1 dia)"}.
+
+REGLAS:
+1. Adapta las comidas al perfil y restricciones del usuario.
+2. Respeta el objetivo calorico y de macros.
+3. Si hay alergenos o restricciones, NUNCA los incluyas.
+4. Usa ingredientes accesibles en Espana.
+5. Las comidas deben ser realistas y variadas.
+
+FORMATO DE RESPUESTA (JSON estricto):
+Devuelve EXCLUSIVAMENTE un JSON valido con esta estructura:
+
+{
+  "type": "${type}",
+  "title": "Titulo breve del plan",
+  "summary": "Resumen del enfoque nutricional en 1-2 frases",
+  "target_kcal": ${profile?.daily_kcal_target ?? 2000},
+  "target_protein_g": ${profile?.daily_protein_g ?? 150},
+  "target_carbs_g": ${profile?.daily_carbs_g ?? 220},
+  "target_fat_g": ${profile?.daily_fat_g ?? 70},
+  "days": [
+    {
+      "day": ${dias},
+      "meals": [
+        { "type": "breakfast", "name": "...", "kcal": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ..., "notes": "..." },
+        { "type": "lunch", "name": "...", "kcal": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ..., "notes": "..." },
+        { "type": "dinner", "name": "...", "kcal": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ..., "notes": "..." },
+        { "type": "snack", "name": "...", "kcal": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ..., "notes": "..." }
+      ]
+    }
+  ]
+}
+
+NO escribas texto fuera del JSON.`;
+
+  const user = `Genera un plan de comida ${type === "weekly" ? "semanal (7 dias, lunes a domingo)" : "diario (hoy)"}. Cada dia con desayuno, almuerzo, cena y un snack. Devuelve SOLO el JSON.`;
+
+  return { system, user };
 }
