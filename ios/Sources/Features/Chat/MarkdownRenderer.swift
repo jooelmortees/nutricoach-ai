@@ -21,7 +21,7 @@ enum MarkdownBlock: Identifiable {
         switch self {
         case .heading(let l, let t): return "h\(l)-\(t)"
         case .paragraph(let t): return "p-\(t)"
-        case .li(let t, let o, let n): return "li-\(o)-\(n)-\(t)"
+        case .listItem(let t, let o, let n): return "li-\(o)-\(n)-\(t)"
         case .codeBlock(let lang, let c): return "code-\(lang ?? "")-\(c.prefix(20))"
         case .blockquote(let t): return "bq-\(t)"
         case .divider: return "hr"
