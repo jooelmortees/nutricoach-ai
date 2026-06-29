@@ -357,6 +357,38 @@ final class HealthKitManager: ObservableObject {
         case last  // FC, peso, SpO2 (ultimo valor del dia)
     }
 
+    // MARK: - Lectura en vivo para Dashboard (sin pasar por Supabase)
+
+    /// Pasos de hoy en vivo (HKStatisticsQuery.cumulativeSum).
+    /// Evita el lag de red: el Dashboard lee directo de HealthKit en vez de
+    /// esperar a la sync periodica al backend.
+    func readTodaySteps() async throws -> Double? {
+        try await readTodayValue(id: .stepCount, strategy: .sum)
+    }
+
+    /// Calorias activas de hoy en vivo.
+    func readTodayActiveEnergy() async throws -> Double? {
+        try await readTodayValue(id: .activeEnergyBurned, strategy: .sum)
+    }
+
+    /// FC reposo de hoy (ultimo valor disponible).
+    func readTodayRestingHeartRate() async throws -> Double? {
+        try await readTodayValue(id: .restingHeartRate, strategy: .last)
+    }
+
+    /// Helper privado: lee el valor agregado de hoy directamente de HealthKit.
+    /// Reutiliza queryAggregatedByDay con ventana [startOfDay, now].
+    private func readTodayValue(
+        id: HKQuantityTypeIdentifier,
+        strategy: AggregationStrategy
+    ) async throws -> Double? {
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: Date())
+        let end = Date()
+        let samples = try await queryAggregatedByDay(id: id, from: start, to: end, strategy: strategy)
+        return samples.first?.value
+    }
+
     /// Mapeo de HKQuantityTypeIdentifier a nombres snake_case consistentes
     /// con la migracion 0001_init.sql (heart_rate, resting_heart_rate, steps, etc.).
     private static func metricName(for id: HKQuantityTypeIdentifier) -> String {

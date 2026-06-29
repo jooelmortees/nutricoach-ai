@@ -300,26 +300,69 @@ final class DashboardViewModel: ObservableObject {
                 }
             }
 
-            // Calcular valores del dia (idx = 6)
-            self.steps = stepsByDay[6]
-            self.activeEnergy = energyByDay[6]
-
-            // Llenar weeklySteps array
+            // Llenar weeklySteps array (datos historicos de Supabase)
             self.weeklySteps = (0..<7).map { Int(stepsByDay[$0] ?? 0) }
 
-            // FC reposo (ultimo valor del dia)
-            self.restingHR = metrics
-                .filter { $0.type == "resting_heart_rate" }
-                .filter { metric in
-                    let date = DateParsing.parse(metric.recordedAt) ?? now
-                    return calendar.isDate(date, inSameDayAs: now)
+            // Lectura en vivo de HealthKit para "Hoy" (fuente primaria).
+            // Evita el lag de red: syncToBackend puede tener throttling o haber
+            // fallado, y los datos de Supabase pueden estar congelados. HealthKit
+            // tiene el valor mas fresco y exacto (incluye Huawei GT6 Pro via
+            // Health app sync). Si falla, usamos Supabase como fallback.
+            let hk = HealthKitManager.shared
+            do {
+                if let liveSteps = try await hk.readTodaySteps() {
+                    self.steps = liveSteps
+                    // Tambien actualizamos weeklySteps[6] para que el chart sea consistente
+                    self.weeklySteps[6] = Int(liveSteps)
+                } else {
+                    self.steps = stepsByDay[6]
                 }
-                .first?.value
+            } catch {
+                AppLogger.info("Dashboard: readTodaySteps fallo, uso fallback Supabase: \(error.localizedDescription)")
+                self.steps = stepsByDay[6]
+            }
+
+            do {
+                if let liveEnergy = try await hk.readTodayActiveEnergy() {
+                    self.activeEnergy = liveEnergy
+                } else {
+                    self.activeEnergy = energyByDay[6]
+                }
+            } catch {
+                AppLogger.info("Dashboard: readTodayActiveEnergy fallo, uso fallback Supabase: \(error.localizedDescription)")
+                self.activeEnergy = energyByDay[6]
+            }
+
+            do {
+                if let liveRestingHR = try await hk.readTodayRestingHeartRate() {
+                    self.restingHR = liveRestingHR
+                } else {
+                    // Fallback: ultimo valor del dia de Supabase
+                    self.restingHR = metrics
+                        .filter { $0.type == "resting_heart_rate" }
+                        .filter { metric in
+                            let date = DateParsing.parse(metric.recordedAt) ?? now
+                            return calendar.isDate(date, inSameDayAs: now)
+                        }
+                        .first?.value
+                }
+            } catch {
+                AppLogger.info("Dashboard: readTodayRestingHeartRate fallo, uso fallback Supabase: \(error.localizedDescription)")
+                self.restingHR = metrics
+                    .filter { $0.type == "resting_heart_rate" }
+                    .filter { metric in
+                        let date = DateParsing.parse(metric.recordedAt) ?? now
+                        return calendar.isDate(date, inSameDayAs: now)
+                    }
+                    .first?.value
+            }
 
             // Sueño: HealthKit registra el sueño con startDate=anoche, endDate=hoy.
             // El recorded_at que guardamos es medianoche del dia de startDate (anoche).
             // Para mostrar el sueño de "esta noche", buscamos el de hoy + ayer
             // (la noche que acaba de terminar o esta en curso).
+            // Sueño no tiene lectura en vivo simple (requiere agregar category samples),
+            // mantenemos Supabase.
             let yesterday = calendar.date(byAdding: .day, value: -1, to: now) ?? now
             let sleepMinutesToday = metrics
                 .filter { $0.type == "sleep_minutes" }

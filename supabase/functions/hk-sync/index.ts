@@ -73,12 +73,17 @@ serve(async (req) => {
       return jsonError(400, "No valid metrics");
     }
 
-    // Insertar (idempotencia: si el cliente reenvía, usamos onConflict)
+    // Upsert con ON CONFLICT DO UPDATE: las metricas diarias (pasos, kcal...)
+    // crecen a lo largo del dia. Cada sync del cliente trae el aggregate
+    // actualizado (HKStatisticsQuery.cumulativeSum). Con ignoreDuplicates: true
+    // (ON CONFLICT DO NOTHING) el valor se congela en la primera sync del dia.
+    // Con ignoreDuplicates: false (ON CONFLICT DO UPDATE) cada sync actualiza
+    // el valor al aggregate mas reciente.
     const { data, error } = await supabaseAdmin
       .from("health_metrics")
       .upsert(rows, {
         onConflict: "user_id,type,recorded_at",
-        ignoreDuplicates: true,
+        ignoreDuplicates: false,
       });
 
     if (error) {
