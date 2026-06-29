@@ -72,7 +72,12 @@ final class MacrosViewModel: ObservableObject {
 
     func selectDate(_ date: Date, userId: String?) async {
         selectedDate = Calendar.current.startOfDay(for: date)
-        await fetchMeals(userId: userId)
+        guard let userId else { return }
+        do {
+            try await fetchMeals(userId: userId)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func changeMonth(by value: Int, userId: String?) async {

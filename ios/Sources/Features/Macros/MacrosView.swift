@@ -131,36 +131,14 @@ struct MacroHeatmapCalendar: View {
             LazyVGrid(columns: columns, spacing: 4) {
                 ForEach(Array(days.enumerated()), id: \.offset) { idx, day in
                     if let date = day {
-                        let compliance = viewModel.compliance(for: date)
-                        let isSelected = calendar.isDate(date, inSameDayAs: viewModel.selectedDate)
-                        let isToday = calendar.isDateInToday(date)
-
-                        Button {
+                        HeatmapCell(
+                            dayNumber: calendar.component(.day, from: date),
+                            compliance: viewModel.compliance(for: date),
+                            isSelected: calendar.isDate(date, inSameDayAs: viewModel.selectedDate),
+                            isToday: calendar.isDateInToday(date)
+                        ) {
                             onSelectDate(date)
-                        } label: {
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(compliance.color)
-                                .frame(height: 34)
-                                .overlay {
-                                    Text("\(calendar.component(.day, from: date))")
-                                        .font(.caption2)
-                                        .foregroundStyle(compliance == .noData ? .secondary : .white)
-                                        .bold(compliance == .onTrack)
-                                }
-                                .overlay {
-                                    if isToday {
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(Color.accentColor, lineWidth: 1.5)
-                                    }
-                                }
-                                .overlay {
-                                    if isSelected {
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(Color.primary, lineWidth: 2.5)
-                                    }
-                                }
                         }
-                        .buttonStyle(.plain)
                     } else {
                         RoundedRectangle(cornerRadius: 6)
                             .fill(Color.clear)
@@ -207,6 +185,41 @@ struct MacroHeatmapCalendar: View {
             days.append(nil)
         }
         return days
+    }
+}
+
+struct HeatmapCell: View {
+    let dayNumber: Int
+    let compliance: MacrosViewModel.DayCompliance
+    let isSelected: Bool
+    let isToday: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(compliance.color)
+                .frame(height: 34)
+                .overlay {
+                    Text("\(dayNumber)")
+                        .font(.caption2)
+                        .foregroundStyle(compliance == .noData ? .secondary : .white)
+                        .bold(compliance == .onTrack)
+                }
+                .overlay {
+                    if isToday {
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.accentColor, lineWidth: 1.5)
+                    }
+                }
+                .overlay {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.primary, lineWidth: 2.5)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
     }
 }
 
