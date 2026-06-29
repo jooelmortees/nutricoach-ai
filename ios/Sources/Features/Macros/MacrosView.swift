@@ -1,5 +1,5 @@
 // ============================================================
-// MacrosView - resumen de macros ingeridas hoy
+// MacrosView - resumen de macros ingeridas
 // ============================================================
 
 import SwiftUI
@@ -7,14 +7,27 @@ import SwiftUI
 struct MacrosView: View {
     @EnvironmentObject var auth: AuthManager
     @StateObject private var viewModel = MacrosViewModel()
+    @State private var editingMeal: LoggedMeal?
+    @State private var mealToDelete: LoggedMeal?
+    @State private var showDeleteConfirm = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
+                    MacroHeatmapCalendar(viewModel: viewModel, userId: auth.profile?.id.uuidString) { date in
+                        Task { await viewModel.selectDate(date, userId: auth.profile?.id.uuidString) }
+                    }
                     MacrosSummaryCards(viewModel: viewModel)
                     TargetComparisonView(viewModel: viewModel)
-                    MealsListView(viewModel: viewModel)
+                    MealsListView(
+                        viewModel: viewModel,
+                        onEdit: { editingMeal = $0 },
+                        onDelete: { meal in
+                            mealToDelete = meal
+                            showDeleteConfirm = true
+                        }
+                    )
                 }
                 .padding()
             }
@@ -34,11 +47,170 @@ struct MacrosView: View {
             .refreshable {
                 await viewModel.refresh(userId: auth.profile?.id.uuidString)
             }
+            .sheet(item: $editingMeal) { meal in
+                LoggedMealEditorSheet(meal: meal) { name, type, kcal, p, c, f in
+                    do {
+                        try await viewModel.updateMeal(
+                            meal,
+                            name: name,
+                            mealType: type,
+                            kcal: kcal,
+                            protein: p,
+                            carbs: c,
+                            fat: f,
+                            userId: auth.profile?.id.uuidString
+                        )
+                    } catch {
+                        viewModel.errorMessage = "Error guardando: \(error.localizedDescription)"
+                    }
+                }
+            }
+            .confirmationDialog(
+                "¿Eliminar \"\(mealToDelete?.name ?? "esta comida")\"?",
+                isPresented: $showDeleteConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Eliminar", role: .destructive) {
+                    if let meal = mealToDelete {
+                        Task { await viewModel.deleteMeal(meal, userId: auth.profile?.id.uuidString) }
+                    }
+                    mealToDelete = nil
+                }
+                Button("Cancelar", role: .cancel) {
+                    mealToDelete = nil
+                }
+            }
         }
     }
 }
 
-// MARK: - Sub-views (cada una con tipo explícito)
+// MARK: - Heatmap mensual
+
+struct MacroHeatmapCalendar: View {
+    @ObservedObject var viewModel: MacrosViewModel
+    let userId: String?
+    let onSelectDate: (Date) -> Void
+
+    private let calendar = Calendar.current
+    private let weekdays = ["L", "M", "X", "J", "V", "S", "D"]
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Button {
+                    Task { await viewModel.changeMonth(by: -1, userId: userId) }
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.body)
+                        .bold()
+                }
+                Spacer()
+                Text(viewModel.displayedMonth, format: .dateTime.month(.wide).year())
+                    .font(.headline)
+                Spacer()
+                Button {
+                    Task { await viewModel.changeMonth(by: 1, userId: userId) }
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.body)
+                        .bold()
+                }
+            }
+
+            HStack(spacing: 4) {
+                ForEach(weekdays, id: \.self) { day in
+                    Text(day)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+
+            let days = generateDays()
+            let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 7)
+            LazyVGrid(columns: columns, spacing: 4) {
+                ForEach(Array(days.enumerated()), id: \.offset) { idx, day in
+                    if let date = day {
+                        let compliance = viewModel.compliance(for: date)
+                        let isSelected = calendar.isDate(date, inSameDayAs: viewModel.selectedDate)
+                        let isToday = calendar.isDateInToday(date)
+
+                        Button {
+                            onSelectDate(date)
+                        } label: {
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(compliance.color)
+                                .frame(height: 34)
+                                .overlay {
+                                    Text("\(calendar.component(.day, from: date))
+                                        .font(.caption2)
+                                        .foregroundStyle(compliance == .noData ? .secondary : .white)
+                                        .bold(compliance == .onTrack)
+                                }
+                                .overlay {
+                                    if isToday {
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color.accentColor, lineWidth: 1.5)
+                                    }
+                                }
+                                .overlay {
+                                    if isSelected {
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color.primary, lineWidth: 2.5)
+                                    }
+                                }
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.clear)
+                            .frame(height: 34)
+                    }
+                }
+            }
+
+            HStack(spacing: 12) {
+                ForEach([
+                    ("Por debajo", Color.orange.opacity(0.6)),
+                    ("En objetivo", Color.green),
+                    ("Por encima", Color.red.opacity(0.8)),
+                    ("Sin datos", Color(.tertiarySystemFill))
+                ], id: \.0) { label, color in
+                    HStack(spacing: 4) {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(color)
+                            .frame(width: 12, height: 12)
+                        Text(label)
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.top, 2)
+        }
+        .padding()
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func generateDays() -> [Date?] {
+        let firstOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: viewModel.displayedMonth))!
+        let weekday = calendar.component(.weekday, from: firstOfMonth)
+        let mondayOffset = (weekday + 5) % 7
+        var days: [Date?] = Array(repeating: nil, count: mondayOffset)
+        let range = calendar.range(of: .day, in: .month, for: firstOfMonth)!
+        for day in range {
+            if let date = calendar.date(byAdding: .day, value: day - 1, to: firstOfMonth) {
+                days.append(date)
+            }
+        }
+        while days.count % 7 != 0 {
+            days.append(nil)
+        }
+        return days
+    }
+}
+
+// MARK: - Sub-views
 
 struct MacrosSummaryCards: View {
     @ObservedObject var viewModel: MacrosViewModel
@@ -48,14 +220,14 @@ struct MacrosSummaryCards: View {
         let p = viewModel.profile
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
             MacroRingCard(
-                title: "Calorías",
+                title: "Calorias",
                 current: t.kcal,
                 target: p?.dailyKcalTarget,
                 unit: "kcal",
                 color: .orange
             )
             MacroRingCard(
-                title: "Proteínas",
+                title: "Proteinas",
                 current: t.protein,
                 target: p?.dailyProteinG,
                 unit: "g",
@@ -86,13 +258,16 @@ struct TargetComparisonView: View {
         let t = viewModel.totals
         let target: Int? = viewModel.profile?.dailyKcalTarget
         VStack(alignment: .leading, spacing: 8) {
-            if let target, target > 0 {
-                HStack {
-                    Text("Objetivo diario").font(.headline)
-                    Spacer()
+            HStack {
+                Text(viewModel.isToday ? "Objetivo de hoy" : "Objetivo del dia")
+                    .font(.headline)
+                Spacer()
+                if let target, target > 0 {
                     Text("\(Int(t.kcal)) / \(target) kcal")
                         .foregroundStyle(.secondary)
                 }
+            }
+            if let target, target > 0 {
                 ProgressView(value: min(t.kcal / Double(target), 1.0))
                     .tint(t.kcal > Double(target) ? Color.red : Color.green)
                 HStack {
@@ -118,19 +293,51 @@ struct TargetComparisonView: View {
 
 struct MealsListView: View {
     @ObservedObject var viewModel: MacrosViewModel
+    let onEdit: (LoggedMeal) -> Void
+    let onDelete: (LoggedMeal) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Comidas de hoy").font(.headline)
+            HStack {
+                Text(viewModel.isToday ? "Comidas de hoy" : "Comidas del dia")
+                    .font(.headline)
+                Spacer()
+                Text(viewModel.selectedDate, format: .dateTime.day().month(.abbreviated))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if viewModel.meals.isEmpty {
-                Text("Aún no has registrado ninguna comida. Envía una foto desde el chat o usa la cámara.")
+                Text("No hay comidas registradas este dia. Envia una foto desde el chat o usa la camara.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding()
             } else {
-                ForEach(viewModel.meals) { meal in
-                    MealRow(meal: meal)
+                List {
+                    ForEach(viewModel.meals) { meal in
+                        MealRow(meal: meal)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .swipeActions(edge: .leading) {
+                                Button {
+                                    onEdit(meal)
+                                } label: {
+                                    Label("Editar", systemImage: "pencil")
+                                }
+                                .tint(.blue)
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    onDelete(meal)
+                                } label: {
+                                    Label("Eliminar", systemImage: "trash")
+                                }
+                            }
+                    }
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .frame(height: CGFloat(viewModel.meals.count) * 88 + 8)
             }
         }
     }
@@ -225,9 +432,9 @@ struct MealRow: View {
                 if let kcal = meal.total_kcal {
                     HStack(spacing: 8) {
                         Text("\(Int(kcal)) kcal")
-                        if let p = meal.total_protein_g { Text("· P \(Int(p))g") }
-                        if let c = meal.total_carbs_g { Text("· C \(Int(c))g") }
-                        if let f = meal.total_fat_g { Text("· G \(Int(f))g") }
+                        if let p = meal.total_protein_g { Text("- P \(Int(p))g") }
+                        if let c = meal.total_carbs_g { Text("- C \(Int(c))g") }
+                        if let f = meal.total_fat_g { Text("- G \(Int(f))g") }
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
