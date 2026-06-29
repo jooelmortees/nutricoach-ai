@@ -111,9 +111,10 @@ final class AuthManager: ObservableObject {
         req.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
 
         let (data, response) = try await URLSession.shared.data(for: req)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard (200..<300).contains(statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? "?"
-            throw AuthError.deleteFailed("HTTP \(http.statusCode): \(body)")
+            throw AuthError.deleteFailed("HTTP \(statusCode): \(body)")
         }
         // Si todo fue bien, cerrar sesion local
         try? await supabase.auth.signOut()
@@ -130,11 +131,13 @@ final class AuthManager: ObservableObject {
             .from("messages")
             .delete()
             .in("conversation_id", value: try await getConversationIds(userId: userId))
+            .execute()
         // Borrar conversaciones
         try await supabase
             .from("conversations")
             .delete()
             .eq("user_id", value: userId.uuidString)
+            .execute()
         AppLogger.info("Conversaciones borradas para usuario \(userId)")
     }
 
