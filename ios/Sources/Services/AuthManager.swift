@@ -98,6 +98,57 @@ final class AuthManager: ObservableObject {
         state = .signedOut
     }
 
+    /// Elimina permanentemente la cuenta del usuario y todos sus datos.
+    /// Llama a la Edge Function `delete-account` que usa service_role para
+    /// borrar tablas + Storage + auth.users. Tras confirmar, cierra sesión.
+    func deleteAccount() async throws {
+        let url = Config.supabaseURL.appending(path: "functions/v1/delete-account")
+        let token = try await supabase.auth.session.accessToken
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? "?"
+            throw AuthError.deleteFailed("HTTP \(http.statusCode): \(body)")
+        }
+        // Si todo fue bien, cerrar sesion local
+        try? await supabase.auth.signOut()
+        profile = nil
+        state = .signedOut
+        AppLogger.info("Cuenta eliminada permanentemente")
+    }
+
+    /// Borra todas las conversaciones y mensajes del usuario.
+    func clearAllConversations() async throws {
+        let userId = try await supabase.auth.session.user.id
+        // Borrar mensajes primero (FK a conversations)
+        try await supabase
+            .from("messages")
+            .delete()
+            .in("conversation_id", value: try await getConversationIds(userId: userId))
+        // Borrar conversaciones
+        try await supabase
+            .from("conversations")
+            .delete()
+            .eq("user_id", value: userId.uuidString)
+        AppLogger.info("Conversaciones borradas para usuario \(userId)")
+    }
+
+    private func getConversationIds(userId: UUID) async throws -> [String] {
+        struct ConvRow: Decodable { let id: UUID }
+        let rows: [ConvRow] = try await supabase
+            .from("conversations")
+            .select("id")
+            .eq("user_id", value: userId.uuidString)
+            .execute()
+            .value
+        return rows.map { $0.id.uuidString }
+    }
+
     private func loadProfile(userId: UUID) async {
         do {
             let response: Profile = try await SupabaseService.shared.client
@@ -117,5 +168,15 @@ final class AuthManager: ObservableObject {
     func refreshProfile() async {
         guard let userId = profile?.id else { return }
         await loadProfile(userId: userId)
+    }
+}
+
+enum AuthError: LocalizedError {
+    case deleteFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .deleteFailed(let msg): return "No se pudo eliminar la cuenta: \(msg)"
+        }
     }
 }

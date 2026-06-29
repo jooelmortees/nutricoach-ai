@@ -13,6 +13,11 @@ struct SettingsView: View {
     @AppStorage("app.hapticsEnabled") private var hapticsEnabled: Bool = true
     @State private var showSignOutConfirm: Bool = false
     @State private var showClearAllConfirm: Bool = false
+    @State private var showDeleteAccountSheet: Bool = false
+    @State private var isDeletingAccount: Bool = false
+    @State private var deleteAccountError: String? = nil
+    @State private var isClearingConversations: Bool = false
+    @State private var clearConversationsError: String? = nil
     @State private var lastSyncDate: Date? = nil
     @State private var isConnectingHealthKit: Bool = false
     @State private var healthKitError: String? = nil
@@ -249,12 +254,55 @@ struct SettingsView: View {
                     }
                 }
 
-                // MARK: - Datos
-                Section("Datos") {
-                    Button(role: .destructive) {
+                // MARK: - Cuenta
+                Section("Cuenta") {
+                    // Borrar conversaciones
+                    Button {
                         showClearAllConfirm = true
                     } label: {
-                        Label("Borrar conversaciones", systemImage: "trash")
+                        HStack {
+                            if isClearingConversations {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "bubble.left.and.bubble.right.slash")
+                            }
+                            Text("Borrar conversaciones")
+                        }
+                        .foregroundStyle(.red)
+                    }
+                    .disabled(isClearingConversations)
+                    if let err = clearConversationsError {
+                        Text(err).font(.caption).foregroundStyle(.red)
+                    }
+
+                    // Cerrar sesión
+                    Button {
+                        showSignOutConfirm = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                            Text("Cerrar sesión")
+                        }
+                        .foregroundStyle(.red)
+                    }
+
+                    // Eliminar cuenta
+                    Button {
+                        showDeleteAccountSheet = true
+                    } label: {
+                        HStack {
+                            if isDeletingAccount {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "person.crop.circle.badge.minus")
+                            }
+                            Text("Eliminar cuenta")
+                        }
+                        .foregroundStyle(.red)
+                    }
+                    .disabled(isDeletingAccount)
+                    if let err = deleteAccountError {
+                        Text(err).font(.caption).foregroundStyle(.red)
                     }
                 }
 
@@ -263,15 +311,6 @@ struct SettingsView: View {
                     LabeledContent("Versión", value: "0.1.0")
                     Link(destination: URL(string: "https://github.com/jooelmortees/nutricoach-ai")!) {
                         Label("Código fuente", systemImage: "chevron.left.forwardslash.chevron.right")
-                    }
-                }
-
-                // MARK: - Sesión
-                Section {
-                    Button(role: .destructive) {
-                        showSignOutConfirm = true
-                    } label: {
-                        Label("Cerrar sesión", systemImage: "rectangle.portrait.and.arrow.right")
                     }
                 }
             }
@@ -292,11 +331,39 @@ struct SettingsView: View {
             }
             .confirmationDialog("¿Borrar todas las conversaciones?", isPresented: $showClearAllConfirm) {
                 Button("Borrar todo", role: .destructive) {
-                    // TODO: implementar delete all conversations
+                    Task {
+                        isClearingConversations = true
+                        clearConversationsError = nil
+                        do {
+                            try await auth.clearAllConversations()
+                        } catch {
+                            clearConversationsError = "Error: \(error.localizedDescription)"
+                        }
+                        isClearingConversations = false
+                    }
                 }
                 Button("Cancelar", role: .cancel) {}
             } message: {
                 Text("Esta acción no se puede deshacer. Se borrarán todas las conversaciones y mensajes de tu cuenta.")
+            }
+            .sheet(isPresented: $showDeleteAccountSheet) {
+                DeleteAccountSheet(
+                    isPresented: $showDeleteAccountSheet,
+                    isDeleting: $isDeletingAccount,
+                    errorMessage: $deleteAccountError,
+                    onConfirm: {
+                        Task {
+                            isDeletingAccount = true
+                            deleteAccountError = nil
+                            do {
+                                try await auth.deleteAccount()
+                            } catch {
+                                deleteAccountError = error.localizedDescription
+                            }
+                            isDeletingAccount = false
+                        }
+                    }
+                )
             }
         }
     }

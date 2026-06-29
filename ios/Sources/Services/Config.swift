@@ -33,4 +33,9 @@ enum Config {
     static let hkSyncURL: URL = {
         supabaseURL.appending(path: "functions/v1/hk-sync")
     }()
+
+    /// URL base de la Edge Function delete-account
+    static let deleteAccountURL: URL = {
+        supabaseURL.appending(path: "functions/v1/delete-account")
+    }()
 }
