@@ -11,6 +11,8 @@ enum AgentEvent {
     case textDelta(String)
     case blockStart
     case blockStop
+    case toolsStart(names: [String])
+    case toolDone(name: String, summary: String)
     case done
     case mealSaved(kcal: Double?, protein: Double?, carbs: Double?, fat: Double?, description: String)
     case error(String)
@@ -107,6 +109,17 @@ final class AgentService: ObservableObject {
             if let text = obj["text"] as? String { return .textDelta(text) }
         case "block_start": return .blockStart
         case "block_stop": return .blockStop
+        case "tools_start":
+            if let names = obj["names"] as? [String] {
+                return .toolsStart(names: names)
+            }
+            return nil
+        case "tool_done":
+            if let name = obj["name"] as? String {
+                let summary = (obj["summary"] as? String) ?? ""
+                return .toolDone(name: name, summary: summary)
+            }
+            return nil
         case "done": return .done
         case "meal_saved":
             return .mealSaved(

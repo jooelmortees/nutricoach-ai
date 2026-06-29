@@ -177,9 +177,36 @@ final class ChatViewModel: ObservableObject {
             }
         case .blockStart, .blockStop:
             break
+        case .toolsStart(let names):
+            // El agente empieza a usar tools. Mostrar indicador en el mensaje.
+            if let idx = messages.indices.last {
+                var statusList: [ToolStatus] = []
+                for name in names {
+                    statusList.append(ToolStatus(name: name, summary: "", isRunning: true))
+                }
+                messages[idx].toolStatus = statusList
+            }
+        case .toolDone(let name, let summary):
+            // Marcar el tool como completado y actualizar el summary
+            if let idx = messages.indices.last {
+                if var tools = messages[idx].toolStatus {
+                    if let toolIdx = tools.firstIndex(where: { $0.name == name }) {
+                        tools[toolIdx].isRunning = false
+                        if !summary.isEmpty {
+                            tools[toolIdx].summary = summary
+                        }
+                    } else {
+                        // Tool no estaba en la lista, lo añadimos como completado
+                        tools.append(ToolStatus(name: name, summary: summary, isRunning: false))
+                    }
+                    messages[idx].toolStatus = tools
+                }
+            }
         case .done:
             if let idx = messages.indices.last {
                 messages[idx].isStreaming = false
+                // Limpiar el estado de tools al terminar
+                messages[idx].toolStatus = nil
             }
             isAgentThinking = false
         case .mealSaved(let kcal, let protein, let carbs, let fat, let description):
@@ -345,6 +372,7 @@ struct ChatMessage: Identifiable {
     var content: String
     var thinking: String?
     var attachments: [MessageAttachment]?
+    var toolStatus: [ToolStatus]?
     var isStreaming: Bool = false
 
     init(
@@ -353,6 +381,7 @@ struct ChatMessage: Identifiable {
         content: String,
         thinking: String? = nil,
         attachments: [MessageAttachment]? = nil,
+        toolStatus: [ToolStatus]? = nil,
         isStreaming: Bool = false
     ) {
         self.id = id
@@ -360,6 +389,7 @@ struct ChatMessage: Identifiable {
         self.content = content
         self.thinking = thinking
         self.attachments = attachments
+        self.toolStatus = toolStatus
         self.isStreaming = isStreaming
     }
 

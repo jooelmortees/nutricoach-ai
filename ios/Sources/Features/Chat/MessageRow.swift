@@ -28,6 +28,10 @@ struct MessageRow: View {
                 if let attachments = message.attachments, !attachments.isEmpty {
                     AttachmentsGrid(attachments: attachments, onImageTap: onImageTap)
                 }
+                // Estado de tools en ejecucion (mientras el agente usa tools)
+                if let toolStatus = message.toolStatus, !toolStatus.isEmpty {
+                    ToolStatusIndicator(tools: toolStatus)
+                }
                 // Burbuja de texto con markdown + deteccion de macros
                 TextBubble(
                     text: message.content,
@@ -238,6 +242,86 @@ struct AttachmentsGrid: View {
     }
 }
 
+// MARK: - Indicador de tools en ejecucion
+
+struct ToolStatusIndicator: View {
+    let tools: [ToolStatus]
+    @State private var dots: Int = 1
+    private let timer = Timer.publish(every: 0.45, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(tools) { tool in
+                HStack(spacing: 6) {
+                    Image(systemName: toolIcon(tool.name))
+                        .font(.caption2)
+                        .foregroundStyle(.blue)
+                    Text(tool.summary.isEmpty ? toolLabel(tool.name) : tool.summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if tool.isRunning {
+                        HStack(spacing: 2) {
+                            ForEach(0..<3) { i in
+                                Circle()
+                                    .fill(.secondary)
+                                    .frame(width: 3, height: 3)
+                                    .opacity(i < dots ? 1.0 : 0.3)
+                            }
+                        }
+                        .onReceive(timer) { _ in
+                            dots = (dots % 3) + 1
+                        }
+                    } else {
+                        Image(systemName: "checkmark")
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.blue.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// Icono SF Symbol para cada tool
+    private func toolIcon(_ name: String) -> String {
+        switch name {
+        case "get_user_profile": return "person.crop.circle"
+        case "get_recent_meals": return "fork.knife"
+        case "get_health_metrics": return "heart.text.square"
+        case "remember_fact": return "brain"
+        case "web_search": return "magnifyingglass"
+        case "calculate_daily_target": return "target"
+        default: return "wrench.and.screwdriver"
+        }
+    }
+
+    /// Etiqueta legible para cada tool
+    private func toolLabel(_ name: String) -> String {
+        switch name {
+        case "get_user_profile": return "Consultando tu perfil"
+        case "get_recent_meals": return "Revisando tus comidas recientes"
+        case "get_health_metrics": return "Leyendo tus métricas de salud"
+        case "remember_fact": return "Guardando en memoria"
+        case "web_search": return "Buscando información"
+        case "calculate_daily_target": return "Calculando tu objetivo diario"
+        default: return "Procesando"
+        }
+    }
+}
+
+struct ToolStatus: Identifiable, Equatable {
+    let id = UUID()
+    let name: String
+    var summary: String
+    var isRunning: Bool
+
+    static func == (lhs: ToolStatus, rhs: ToolStatus) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
 // MARK: - Burbuja de texto (con markdown + deteccion de macros)
 
 private struct TextBubble: View {
@@ -271,7 +355,7 @@ private struct TextBubble: View {
                 VStack(alignment: .leading, spacing: 8) {
                     // Texto sin el JSON (markdown renderizado)
                     if !extracted.cleaned.isEmpty {
-                        MarkdownText(text: extracted.cleaned)
+                        MarkdownView(text: extracted.cleaned)
                     }
                     // Tarjeta de macros
                     MacrosCard(meal: macros, onSave: { editedMeal in
@@ -279,8 +363,8 @@ private struct TextBubble: View {
                     })
                 }
             } else {
-                // Caso 2: texto normal (markdown renderizado)
-                MarkdownText(text: text)
+                // Caso 2: texto normal (markdown renderizado completo)
+                MarkdownView(text: text)
             }
         }
         .padding(.horizontal, 14)
@@ -311,29 +395,6 @@ private struct TextBubble: View {
 
     private var fg: Color {
         role == .user ? .white : .primary
-    }
-}
-
-// MARK: - Texto con markdown (AttributedString)
-
-private struct MarkdownText: View {
-    let text: String
-
-    var body: some View {
-        // Intentar parsear como markdown. Si falla, mostrar el texto plano.
-        if let attributed = try? AttributedString(
-            markdown: text,
-            options: AttributedString.MarkdownParsingOptions(
-                allowsExtendedAttributes: false,
-                interpretedSyntax: .inlineOnlyPreservingWhitespace
-            )
-        ) {
-            Text(attributed)
-                .textSelection(.enabled)
-        } else {
-            Text(text)
-                .textSelection(.enabled)
-        }
     }
 }
 
@@ -440,36 +501,53 @@ private struct MacroPill: View {
     }
 }
 
-// MARK: - Thinking bubble (plegable, oculto por defecto)
+// MARK: - Thinking bubble (plegable inline, sin popover)
 
 private struct ThinkingBubble: View {
     let text: String
     @State private var isExpanded: Bool = false
 
     var body: some View {
-        Button {
-            isExpanded.toggle()
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: isExpanded ? "brain.head.profile" : "lightbulb")
-                    .font(.caption2)
-                Text(isExpanded ? "Ocultar razonamiento" : "Ver razonamiento")
-                    .font(.caption2)
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: isExpanded ? "chevron.down" : "brain.head.profile")
+                        .font(.caption2)
+                    Text(isExpanded ? "Ocultar razonamiento" : "Ver razonamiento")
+                        .font(.caption2)
+                    if !isExpanded {
+                        Text("\u{2022} \(truncatedPreview)")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                }
+                .foregroundStyle(.purple)
             }
-            .foregroundStyle(.purple)
-        }
-        .padding(.vertical, 2)
-        .buttonStyle(.plain)
-        .popover(isPresented: $isExpanded, attachmentAnchor: .point(.top), arrowEdge: .bottom) {
-            ScrollView {
+            .buttonStyle(.plain)
+
+            if isExpanded {
                 Text(text)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(12)
-                    .frame(maxWidth: 320)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(Color.purple.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            .frame(maxHeight: 300)
-            .presentationCompactAdaptation(.popover)
         }
+    }
+
+    /// Preview truncado para mostrar cuando esta colapsado
+    private var truncatedPreview: String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count <= 60 {
+            return trimmed
+        }
+        return String(trimmed.prefix(60)) + "..."
     }
 }

@@ -253,7 +253,9 @@ serve(async (req) => {
             }
 
             // Hay tool_calls: ejecutar y volver a llamar a M3
-            controller.enqueue(encoder.encode(sseEvent("tools_start", { count: toolCalls.length, names: toolCalls.map(t => t.function.name) })));
+            // Emitir evento tools_start con nombres legibles de las tools
+            const toolNames = toolCalls.map(t => t.function.name);
+            controller.enqueue(encoder.encode(sseEvent("tools_start", { names: toolNames })));
 
             // Anadir el assistant message con tool_calls al historial
             apiMessages.push({
@@ -266,12 +268,13 @@ serve(async (req) => {
               }))
             });
 
-            // Ejecutar cada tool
+            // Ejecutar cada tool y emitir su resultado al cliente
             for (const tc of toolCalls) {
               const name = tc.function.name;
               let args: any = {};
               try { args = JSON.parse(tc.function.arguments || "{}"); } catch (_) { args = {}; }
               const toolResult = await executeTool(name, args, supabaseAdmin, user.id, profile, facts);
+              // Emitir tool_done con el summary legible
               controller.enqueue(encoder.encode(sseEvent("tool_done", { name, summary: toolResult.summary })));
               // Anadir el resultado al historial
               apiMessages.push({
@@ -410,14 +413,14 @@ async function saveAssistantMessage(
 async function saveMeal(supabase: any, userId: string, analysis: any) {
   const { error } = await supabase.from("meals").insert({
     user_id: userId,
-    description: analysis.description ?? "Sin descripción",
+    name: analysis.description ?? "Sin descripción",
     meal_type: analysis.meal_type ?? "other",
-    kcal: analysis.kcal ?? null,
-    protein_g: analysis.protein_g ?? null,
-    carbs_g: analysis.carbs_g ?? null,
-    fat_g: analysis.fat_g ?? null,
-    confidence: analysis.confidence ?? null,
-    source: "photo",
+    total_kcal: analysis.kcal ?? null,
+    total_protein_g: analysis.protein_g ?? null,
+    total_carbs_g: analysis.carbs_g ?? null,
+    total_fat_g: analysis.fat_g ?? null,
+    source: "ai_suggestion",
+    notes: analysis.confidence ? `confidence=${analysis.confidence} source=ai` : "source=ai",
   });
   if (error) console.error("saveMeal error:", error);
 }

@@ -49,6 +49,7 @@ secrets/
 # Supabase
 supabase/.branches
 supabase/.temp
+supabase/supabase/
 
 # Node / Deno
 node_modules/
