@@ -80,7 +80,11 @@ serve(async (req) => {
         stream: false,
         max_completion_tokens: 8192,
         temperature: 0.7,
+        // CRITICO: thinking desactivado para que response_format produzca JSON puro.
+        // Con thinking:adaptive (default), M3 emite bloques de razonamiento dentro
+        // de content y corrompe el JSON. Verificado empiricamente 2026-06-29.
         response_format: { type: "json_object" },
+        thinking: { type: "disabled" },
       }),
     });
 
