@@ -129,7 +129,7 @@ struct MacroHeatmapCalendar: View {
             let days = generateDays()
             let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 7)
             LazyVGrid(columns: columns, spacing: 4) {
-                ForEach(Array(days.enumerated()), id: \.offset) { idx, day in
+                ForEach(Array(days.enumerated()), id: \.offset) { _, day in
                     if let date = day {
                         HeatmapCell(
                             dayNumber: calendar.component(.day, from: date),
@@ -203,7 +203,7 @@ struct HeatmapCell: View {
                 .overlay {
                     Text("\(dayNumber)")
                         .font(.caption2)
-                        .foregroundStyle(compliance == .noData ? .secondary : .white)
+                        .foregroundStyle(compliance == .noData ? Color.secondary : Color.white)
                         .bold(compliance == .onTrack)
                 }
                 .overlay {
