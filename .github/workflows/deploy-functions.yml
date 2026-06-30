@@ -63,30 +63,20 @@ jobs:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: supabase functions deploy mcp-router --project-ref "$SUPABASE_PROJECT_REF"
 
-      - name: Deploy recalculate-macros
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-        run: supabase functions deploy recalculate-macros --project-ref "$SUPABASE_PROJECT_REF"
-
-      - name: Deploy generate-plan
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-        run: supabase functions deploy generate-plan --project-ref "$SUPABASE_PROJECT_REF"
-
       - name: Set Edge Function secrets
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          MINIMAX_BASE_URL: ${{ vars.MINIMAX_BASE_URL || 'https://api.minimax.io/v1' }}
+          MINIMAX_MODEL: ${{ vars.MINIMAX_MODEL || 'MiniMax-M3' }}
           USDA_FDC_API_KEY: ${{ secrets.USDA_FDC_API_KEY }}
         run: |
           echo "Configurando secrets de Edge Functions..."
           supabase secrets set \
-            GEMINI_API_KEY="$GEMINI_API_KEY" \
-            GEMINI_MODEL="$GEMINI_MODEL" \
+            MINIMAX_API_KEY="$MINIMAX_API_KEY" \
+            MINIMAX_BASE_URL="$MINIMAX_BASE_URL" \
+            MINIMAX_MODEL="$MINIMAX_MODEL" \
             USDA_FDC_API_KEY="$USDA_FDC_API_KEY" \
             --project-ref "$SUPABASE_PROJECT_REF"
 

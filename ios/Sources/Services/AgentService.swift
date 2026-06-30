@@ -210,17 +210,8 @@ final class AgentService: ObservableObject {
 }
 
 struct AgentAttachment: Encodable {
-    let type: String  // "image" | "audio"
-    let url: String?
-    let data: String?
-    let mime_type: String?
-
-    init(type: String, url: String? = nil, data: String? = nil, mime_type: String? = nil) {
-        self.type = type
-        self.url = url
-        self.data = data
-        self.mime_type = mime_type
-    }
+    let type: String  // "image" | "video"
+    let url: String
 }
 
 struct AgentRequest: Encodable {

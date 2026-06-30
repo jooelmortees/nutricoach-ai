@@ -4,12 +4,10 @@
 
 import SwiftUI
 import PhotosUI
-import AVFoundation
 
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var viewModel = ChatViewModel()
-    @StateObject private var audioRecorder = AudioRecorder()
     @State private var inputText: String = ""
     /// Seleccion multiple del PhotosPicker. NO se sube hasta enviar.
     @State private var selectedItems: [PhotosPickerItem] = []
@@ -17,9 +15,6 @@ struct ChatView: View {
     /// Imagen abierta en fullscreen (tap en thumbnail).
     @State private var fullscreenImageURL: String?
     @State private var showClearConfirm: Bool = false
-    @State private var isRecordingAudio: Bool = false
-    @State private var audioRecordingSeconds: Int = 0
-    @State private var audioTimer: Timer?
 
     var body: some View {
         NavigationStack {
@@ -128,54 +123,6 @@ struct ChatView: View {
                 )
                 .padding(.horizontal, 16)
             }
-            // Indicador de grabacion de audio
-            if isRecordingAudio {
-                HStack(spacing: 8) {
-                    Image(systemName: "waveform.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.red)
-                        .scaleEffect(isRecordingAudio ? 1.0 : 0.8)
-                        .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: isRecordingAudio)
-                    Text("Grabando... \(audioRecordingSeconds)s")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                    Spacer()
-                    Button {
-                        cancelAudioRecording()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
-                .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                .padding(.horizontal, 16)
-            }
-            // Indicador de audio grabado pendiente
-            if let audioData = audioRecorder.audioData, !isRecordingAudio {
-                HStack(spacing: 8) {
-                    Image(systemName: "speaker.wave.2.fill")
-                        .font(.title3)
-                        .foregroundStyle(.green)
-                    Text("Audio listo para enviar")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        audioRecorder.audioData = nil
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
-                .background(.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                .padding(.horizontal, 16)
-            }
             Divider()
             HStack(spacing: 12) {
                 // PhotosPicker multi-select: selectionLimit = nil -> ilimitadas
@@ -193,26 +140,11 @@ struct ChatView: View {
                 .onChange(of: selectedItems) { _, newItems in
                     Task {
                         await viewModel.handlePickedImages(newItems)
-                        // Limpiar la seleccion del PhotosPicker para poder
+                        // Limpiar la selección del PhotosPicker para poder
                         // volver a seleccionar las mismas imagenes en otro envio
                         selectedItems = []
                     }
                 }
-                .disabled(isRecordingAudio)
-
-                // Boton de micro: grabar audio
-                Button {
-                    if isRecordingAudio {
-                        stopAudioRecording()
-                    } else {
-                        startAudioRecording()
-                    }
-                } label: {
-                    Image(systemName: isRecordingAudio ? "stop.circle.fill" : "mic.circle")
-                        .font(.system(size: 24))
-                        .foregroundStyle(isRecordingAudio ? .red : .green)
-                }
-                .disabled(viewModel.isAgentThinking)
 
                 TextField(
                     inputPlaceholder,
@@ -229,7 +161,6 @@ struct ChatView: View {
                 .onSubmit {
                     Task { await send() }
                 }
-                .disabled(isRecordingAudio)
 
                 Button {
                     Task { await send() }
@@ -245,8 +176,6 @@ struct ChatView: View {
         }
         .background(.bar)
         .animation(.easeInOut(duration: 0.2), value: viewModel.pendingAttachments.count)
-        .animation(.easeInOut(duration: 0.2), value: isRecordingAudio)
-        .animation(.easeInOut(duration: 0.2), value: audioRecorder.audioData != nil)
     }
 
     private var inputPlaceholder: String {
@@ -258,45 +187,18 @@ struct ChatView: View {
     private var canSend: Bool {
         let hasText = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasAttachments = !viewModel.pendingAttachments.isEmpty
-        let hasAudio = audioRecorder.audioData != nil
-        return (hasText || hasAttachments || hasAudio) && !viewModel.isAgentThinking && !isRecordingAudio
+        return (hasText || hasAttachments) && !viewModel.isAgentThinking
     }
 
     private func send() async {
         // Limpiar inputText, focus y selectedItems ANTES del await para que
         // el UI se sienta inmediato y no parezca que el boton "no hace nada"
+        // (que era el bug reportado: el texto se quedaba y habia que cerrar
+        // la app si el stream se colgaba sin 'done').
         let text = inputText
         inputText = ""
         inputFocused = false
-        // Extraer audio si hay
-        let audioData = audioRecorder.audioData
-        await viewModel.send(text: text, audioData: audioData)
-        audioRecorder.audioData = nil
-    }
-
-    // MARK: - Audio recording
-
-    private func startAudioRecording() {
-        audioRecorder.startRecording()
-        isRecordingAudio = true
-        audioRecordingSeconds = 0
-        audioTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            audioRecordingSeconds += 1
-        }
-    }
-
-    private func stopAudioRecording() {
-        audioTimer?.invalidate()
-        audioTimer = nil
-        audioRecorder.stopRecording()
-        isRecordingAudio = false
-    }
-
-    private func cancelAudioRecording() {
-        audioTimer?.invalidate()
-        audioTimer = nil
-        audioRecorder.cancelRecording()
-        isRecordingAudio = false
+        await viewModel.send(text: text)
     }
 
     /// True si el mensaje en `index` es el ULTIMO mensaje del asistente
