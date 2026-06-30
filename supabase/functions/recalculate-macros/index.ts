@@ -1,8 +1,8 @@
 // ============================================================
 // recalculate-macros - Edge Function
-// Recibe ingredientes editados por el usuario y pide a MiniMax-M3
+// Recibe ingredientes editados por el usuario y pide a Gemini 2.5 Flash
 // que calcule los macros (kcal, protein, carbs, fat) y devuelva
-// un JSON estructurado.
+// un JSON estructurado garantizado por responseFormat.
 // ============================================================
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
@@ -10,9 +10,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const MINIMAX_API_KEY = Deno.env.get("MINIMAX_API_KEY")!;
-const MINIMAX_BASE_URL = Deno.env.get("MINIMAX_BASE_URL") ?? "https://api.minimax.io/v1";
-const MINIMAX_MODEL = Deno.env.get("MINIMAX_MODEL") ?? "MiniMax-M3";
+const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
+const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-2.5-flash";
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -43,7 +43,6 @@ serve(async (req) => {
       return jsonError(401, "Missing Authorization header");
     }
 
-    // Verificar usuario
     const supabaseUser = createClient(
       SUPABASE_URL,
       SUPABASE_ANON_KEY,
@@ -59,77 +58,79 @@ serve(async (req) => {
       return jsonError(400, "ingredients array required");
     }
 
-    // Construir prompt para MiniMax
     const ingredientsText = body.ingredients
       .map(i => `- ${i.name}: ${i.quantity} ${i.unit}`)
       .join("\n");
 
-    const systemPrompt = `Eres un dietista-nutricionista experto. Recibes una lista de ingredientes con cantidades y debes calcular los macros totales (kcal, proteínas, carbohidratos y grasas) de la comida resultante.
+    const systemPrompt = `Eres un dietista-nutricionista experto. Recibes una lista de ingredientes con cantidades y debes calcular los macros totales (kcal, proteinas, carbohidratos y grasas) de la comida resultante.
 
-Responde SOLO con un JSON válido, sin texto adicional, con este formato exacto:
+Responde SOLO con un JSON valido, sin texto adicional, con este formato exacto:
 {"description": "nombre de la comida", "kcal": 450, "protein_g": 25, "carbs_g": 55, "fat_g": 15}
 
 Reglas:
-- kcal: calorías totales sumando todos los ingredientes
-- protein_g: gramos de proteína totales
+- kcal: calorias totales sumando todos los ingredientes
+- protein_g: gramos de proteina totales
 - carbs_g: gramos de carbohidratos totales
 - fat_g: gramos de grasa totales
-- Usa tu conocimiento de densidad calórica: proteína 4 kcal/g, carbs 4 kcal/g, grasa 9 kcal/g
-- NUNCA dejes ningún campo en 0 si la comida tiene macros
-- Redondea a números enteros`;
+- Usa tu conocimiento de densidad calorica: proteina 4 kcal/g, carbs 4 kcal/g, grasa 9 kcal/g
+- NUNCA dejes ningun campo en 0 si la comida tiene macros
+- Redondea a numeros enteros`;
 
     const userPrompt = `Comida: ${body.name}\nIngredientes:\n${ingredientsText}\n\nCalcula los macros totales y responde SOLO con el JSON.`;
 
-    // Llamar a MiniMax
-    const response = await fetch(`${MINIMAX_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${MINIMAX_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: MINIMAX_MODEL,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        temperature: 0.3,
-        max_completion_tokens: 500,
-        // CRITICO: thinking desactivado para que response_format produzca JSON puro.
-        // Con thinking:adaptive (default), M3 emite bloques de razonamiento dentro
-        // de content y corrompe el JSON. Verificado empiricamente 2026-06-29.
-        response_format: { type: "json_object" },
-        thinking: { type: "disabled" },
-      }),
-    });
+    const response = await fetch(
+      `${GEMINI_BASE_URL}/${GEMINI_MODEL}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "x-goog-api-key": GEMINI_API_KEY,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 500,
+            responseFormat: [{
+              type: "text",
+              mimeType: "application/json",
+              schema: {
+                type: "OBJECT",
+                properties: {
+                  description: { type: "STRING" },
+                  kcal: { type: "NUMBER" },
+                  protein_g: { type: "NUMBER" },
+                  carbs_g: { type: "NUMBER" },
+                  fat_g: { type: "NUMBER" },
+                },
+                required: ["description", "kcal", "protein_g", "carbs_g", "fat_g"],
+              },
+            }],
+          },
+        }),
+      }
+    );
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error("MiniMax error:", response.status, errText);
+      console.error("Gemini error:", response.status, errText);
       return jsonError(500, `Error del modelo: ${response.status}`);
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content ?? "";
-
-    // Extraer JSON de la respuesta
-    let jsonStr = content.trim();
-    // Si viene envuelto en ```json ... ```, extraerlo
-    if (jsonStr.startsWith("```")) {
-      jsonStr = jsonStr.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-    }
-    // Buscar el primer { y el último }
-    const firstBrace = jsonStr.indexOf("{");
-    const lastBrace = jsonStr.lastIndexOf("}");
-    if (firstBrace >= 0 && lastBrace > firstBrace) {
-      jsonStr = jsonStr.substring(firstBrace, lastBrace + 1);
-    }
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
 
     let macros;
     try {
-      macros = JSON.parse(jsonStr);
+      macros = JSON.parse(content);
     } catch {
-      return jsonError(500, "El modelo no devolvió un JSON válido");
+      // Fallback: extraer JSON del texto si responseFormat no lo garantizo
+      const jsonStr = extractJson(content);
+      if (!jsonStr) {
+        return jsonError(500, "El modelo no devolvio un JSON valido");
+      }
+      macros = JSON.parse(jsonStr);
     }
 
     return new Response(
@@ -155,4 +156,11 @@ function jsonError(status: number, message: string) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+function extractJson(text: string): string | null {
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) return null;
+  return text.substring(firstBrace, lastBrace + 1);
 }
