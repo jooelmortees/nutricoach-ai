@@ -38,7 +38,10 @@ struct RootView: View {
             case .signedOut:
                 AuthView()
             case .signedIn:
-                if let profile = auth.profile, profile.onboardedAt == nil {
+                // Si no hay perfil o no ha completado onboarding, mostrar onboarding.
+                // profile nil significa que la fila no existe en BD (trigger fallo o
+                // usuario creado antes de la migracion 0006).
+                if auth.profile == nil || auth.profile?.onboardedAt == nil {
                     OnboardingView()
                 } else {
                     MainTabView()

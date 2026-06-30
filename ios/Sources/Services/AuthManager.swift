@@ -163,7 +163,39 @@ final class AuthManager: ObservableObject {
                 .value
             self.profile = response
         } catch {
-            AppLogger.warning("No se pudo cargar perfil: \(error.localizedDescription)")
+            // La fila no existe en profiles (trigger fallo o usuario creado
+            // antes de la migracion 0006). Crear fila vacia con upsert para
+            // que el onboarding pueda hacer update despues.
+            AppLogger.warning("Perfil no encontrado, creando fila vacia: \(error.localizedDescription)")
+            await createEmptyProfile(userId: userId)
+        }
+    }
+
+    private func createEmptyProfile(userId: UUID) async {
+        struct EmptyProfile: Encodable {
+            let id: String
+            let full_name: String?
+        }
+        let payload = EmptyProfile(
+            id: userId.uuidString,
+            full_name: nil
+        )
+        do {
+            try await SupabaseService.shared.client
+                .from("profiles")
+                .upsert(payload, onConflict: "id")
+                .execute()
+            // Recargar para que profile no sea nil
+            let response: Profile = try await SupabaseService.shared.client
+                .from("profiles")
+                .select()
+                .eq("id", value: userId.uuidString)
+                .single()
+                .execute()
+                .value
+            self.profile = response
+        } catch {
+            AppLogger.error("No se pudo crear perfil vacio: \(error.localizedDescription)")
         }
     }
 

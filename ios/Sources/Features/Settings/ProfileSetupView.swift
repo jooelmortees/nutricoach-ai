@@ -190,6 +190,7 @@ struct ProfileSetupView: View {
 
         // Construir update payload
         struct UpdatePayload: Encodable {
+            let id: String
             let full_name: String?
             let birth_date: String?
             let sex: String?
@@ -207,30 +208,31 @@ struct ProfileSetupView: View {
             let budget_eur_per_week: Double?
         }
 
-        let payload = UpdatePayload(
-            full_name: fullName.isEmpty ? nil : fullName,
-            birth_date: birthDate,
-            sex: sex,
-            height_cm: Double(heightString),
-            weight_kg: Double(weightString),
-            target_weight_kg: Double(targetWeightString),
-            activity_level: activityLevel,
-            goal: goal,
-            dietary_style: splitList(dietaryStyle),
-            allergens: splitList(allergens),
-            restrictions: splitList(restrictions),
-            medical_conditions: splitList(medicalConditions),
-            household_context: householdContext.isEmpty ? nil : householdContext,
-            cooking_skill: cookingSkill,
-            budget_eur_per_week: Double(budgetString)
-        )
-
         do {
             let userId = try await SupabaseService.shared.client.auth.session.user.id.uuidString
+
+            let payload = UpdatePayload(
+                id: userId,
+                full_name: fullName.isEmpty ? nil : fullName,
+                birth_date: birthDate,
+                sex: sex,
+                height_cm: Double(heightString),
+                weight_kg: Double(weightString),
+                target_weight_kg: Double(targetWeightString),
+                activity_level: activityLevel,
+                goal: goal,
+                dietary_style: splitList(dietaryStyle),
+                allergens: splitList(allergens),
+                restrictions: splitList(restrictions),
+                medical_conditions: splitList(medicalConditions),
+                household_context: householdContext.isEmpty ? nil : householdContext,
+                cooking_skill: cookingSkill,
+                budget_eur_per_week: Double(budgetString)
+            )
+
             try await SupabaseService.shared.client
                 .from("profiles")
-                .update(payload)
-                .eq("id", value: userId)
+                .upsert(payload, onConflict: "id")
                 .execute()
 
             // Recargar perfil en auth
