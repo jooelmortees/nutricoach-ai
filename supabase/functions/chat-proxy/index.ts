@@ -53,8 +53,13 @@ serve(async (req) => {
 
     // 2. Parsear body
     const body: ChatRequest = await req.json();
-    if (!body.conversation_id || !body.message) {
-      return jsonError(400, "Missing conversation_id or message");
+    if (!body.conversation_id) {
+      return jsonError(400, "Missing conversation_id");
+    }
+    // message puede ser vacio si hay attachments de audio o imagen
+    const hasAttachments = (body.attachments ?? []).length > 0;
+    if (!body.message && !hasAttachments) {
+      return jsonError(400, "Missing message or attachments");
     }
 
     // 3. Cliente con service_role (bypasea RLS) para el agente
@@ -69,7 +74,8 @@ serve(async (req) => {
     const systemPrompt = buildSystemPrompt(profile, facts);
 
     // 6. Guardar mensaje del usuario en BD
-    await saveUserMessage(supabaseAdmin, body.conversation_id, body.message, body.attachments);
+    const messageToSave = body.message || (hasAttachments ? "[Audio/Imagen]" : "");
+    await saveUserMessage(supabaseAdmin, body.conversation_id, messageToSave, body.attachments);
 
     // 7. Construir contents para Gemini (formato multimodal).
     //    Gemini usa "parts" con type text/inlineData.
