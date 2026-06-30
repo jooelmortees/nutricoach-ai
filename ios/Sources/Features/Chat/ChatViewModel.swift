@@ -98,15 +98,17 @@ final class ChatViewModel: ObservableObject {
         pendingAttachments = []
     }
 
-    /// Envía un mensaje al agente. Sube TODAS las imagenes pendientes a Storage,
+    /// Envia un mensaje al agente. Sube TODAS las imagenes pendientes a Storage,
     /// las adjunta al mensaje, y limpia el estado de preview.
-    func send(text: String) async {
+    /// Si hay audioData, lo envia como AgentAttachment type "audio" en base64.
+    func send(text: String, audioData: Data? = nil) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasText = !trimmed.isEmpty
         let hasAttachments = !pendingAttachments.isEmpty
-        guard hasText || hasAttachments else { return }
+        let hasAudio = audioData != nil
+        guard hasText || hasAttachments || hasAudio else { return }
         guard let convId = currentConversationId else {
-            errorMessage = "No hay conversación activa."
+            errorMessage = "No hay conversacion activa."
             return
         }
 
@@ -114,8 +116,11 @@ final class ChatViewModel: ObservableObject {
         var displayAttachments: [MessageAttachment] = []
         var agentAttachments: [AgentAttachment] = []
         var displayText = trimmed
-        if hasAttachments && !hasText {
-            displayText = "¿Qué macros tiene esta comida?"
+        if hasAttachments && !hasText && !hasAudio {
+            displayText = "Que macros tiene esta comida?"
+        }
+        if hasAudio && !hasText {
+            displayText = ""
         }
         // Snapshot para evitar race conditions si el user modifica el array
         let toUpload = pendingAttachments
@@ -130,7 +135,13 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
-        // 2. Limpiar adjuntos pendientes (la UI ya no muestra preview)
+        // 2. Adjuntar audio como base64 inline
+        if let audio = audioData {
+            let base64 = audio.base64EncodedString()
+            agentAttachments.append(AgentAttachment(type: "audio", data: base64, mime_type: "audio/m4a"))
+        }
+
+        // 3. Limpiar adjuntos pendientes (la UI ya no muestra preview)
         pendingAttachments = []
 
         // 3. Añadir mensaje del usuario a la UI (con attachments para mostrar)
