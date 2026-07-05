@@ -18,6 +18,7 @@ final class ChatViewModel: ObservableObject {
     @Published var pendingAttachments: [PendingAttachment] = []
 
     private let agent = AgentService.shared
+    private var textThrottler: TextThrottler?
 
     func loadOrCreateConversation() async {
         do {
@@ -172,9 +173,15 @@ final class ChatViewModel: ObservableObject {
                 messages[idx].thinking = (messages[idx].thinking ?? "") + text
             }
         case .textDelta(let text):
-            if let idx = messages.indices.last {
-                messages[idx].content += text
+            // Throttle: acumular tokens y volcar a UI cada ~80ms
+            // para evitar que SwiftUI congele en mensajes largos.
+            if textThrottler == nil {
+                textThrottler = TextThrottler(interval: 0.08) { [weak self] chunk in
+                    guard let self, let idx = self.messages.indices.last else { return }
+                    self.messages[idx].content += chunk
+                }
             }
+            textThrottler?.append(text)
         case .blockStart, .blockStop:
             break
         case .toolsStart(let names):
@@ -203,6 +210,9 @@ final class ChatViewModel: ObservableObject {
                 }
             }
         case .done:
+            // Flush final: volcar cualquier texto pendiente del throttler
+            textThrottler?.flushNow()
+            textThrottler = nil
             if let idx = messages.indices.last {
                 messages[idx].isStreaming = false
                 // Limpiar el estado de tools al terminar
@@ -216,6 +226,8 @@ final class ChatViewModel: ObservableObject {
                 content: "🍽️ \(description)\n\(summary)\n\nRegistrada en tu pestaña Macros."
             ))
         case .error(let msg):
+            textThrottler?.flushNow()
+            textThrottler = nil
             errorMessage = msg
             isAgentThinking = false
             if let idx = messages.indices.last, messages[idx].role == .assistant && messages[idx].isStreaming {

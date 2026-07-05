@@ -330,40 +330,20 @@ private struct TextBubble: View {
     let isStreaming: Bool
     let onSaveMeal: (PendingMeal) async -> Bool
 
-    @State private var dots: Int = 1
-    private let timer = Timer.publish(every: 0.45, on: .main, in: .common).autoconnect()
-
     var body: some View {
-        // ContextMenu aparece con long press: copiar, regenerar, reintentar
         VStack(alignment: .leading, spacing: 8) {
-            // Si esta vacio y esta streaming, mostrar 3 circulos
             if text.isEmpty && isStreaming {
-                HStack(spacing: 3) {
-                    ForEach(0..<3) { i in
-                        Circle()
-                            .fill(.secondary)
-                            .frame(width: 7, height: 7)
-                            .opacity(i < dots ? 1.0 : 0.3)
-                    }
-                }
-                .frame(width: 36, height: 22, alignment: .center)
-                .onReceive(timer) { _ in
-                    dots = (dots % 3) + 1
-                }
+                TypingIndicator()
             } else if let extracted = PendingMeal.extract(from: text), let macros = extracted.macros {
-                // Caso 1: se detectaron macros en el texto
                 VStack(alignment: .leading, spacing: 8) {
-                    // Texto sin el JSON (markdown renderizado)
                     if !extracted.cleaned.isEmpty {
                         MarkdownView(text: extracted.cleaned)
                     }
-                    // Tarjeta de macros
                     MacrosCard(meal: macros, onSave: { editedMeal in
                         await onSaveMeal(editedMeal)
                     })
                 }
             } else {
-                // Caso 2: texto normal (markdown renderizado completo)
                 MarkdownView(text: text)
             }
         }
@@ -377,14 +357,6 @@ private struct TextBubble: View {
                 UIPasteboard.general.string = text
             } label: {
                 Label("Copiar", systemImage: "doc.on.doc")
-            }
-            if role == .assistant {
-                Button {
-                    // Esto se inyecta desde fuera via onRegenerate
-                } label: {
-                    Label("Regenerar", systemImage: "arrow.clockwise")
-                }
-                .disabled(true)  // El real callback se inyecta via messageActions
             }
         }
     }

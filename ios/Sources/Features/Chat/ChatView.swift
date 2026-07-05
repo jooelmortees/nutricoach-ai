@@ -76,6 +76,8 @@ struct ChatView: View {
         }
     }
 
+    @State private var isPinnedToBottom: Bool = true
+
     private var messagesList: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -83,8 +85,29 @@ struct ChatView: View {
                     if let err = viewModel.errorMessage {
                         ErrorBanner(message: err) {
                             viewModel.errorMessage = nil
-                        }
-                    }
+    }
+}
+
+// MARK: - Preference key para detectar si el scroll esta al final
+
+struct ScrollAtBottomPreferenceKey: PreferenceKey {
+    static var defaultValue: Bool = true
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = nextValue()
+    }
+}
+
+struct ScrollAtBottomDetector: View {
+    var body: some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: ScrollAtBottomPreferenceKey.self,
+                value: proxy.frame(in: .global).maxY > UIScreen.main.bounds.height - 200
+            )
+        }
+        .frame(height: 1)
+    }
+}
                     ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, msg in
                         MessageRow(
                             message: msg,
@@ -101,14 +124,24 @@ struct ChatView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
+                ScrollAtBottomDetector()
             }
+            .scrollDismissesKeyboard(.interactively)
+            .onPreferenceChange(ScrollAtBottomPreferenceKey.self) { pinned in
+                isPinnedToBottom = pinned
+            }
+            // Auto-scroll solo cuando se anade un mensaje nuevo
             .onChange(of: viewModel.messages.count) { _, _ in
-                withAnimation { proxy.scrollTo(viewModel.messages.last?.id, anchor: .bottom) }
-            }
-            .onChange(of: viewModel.messages.last?.content) { _, _ in
                 if let lastId = viewModel.messages.last?.id {
-                    withAnimation { proxy.scrollTo(lastId, anchor: .bottom) }
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(lastId, anchor: .bottom)
+                    }
                 }
+            }
+            // Durante streaming: solo scroll si el user ya esta abajo
+            .onChange(of: viewModel.messages.last?.content) { _, _ in
+                guard isPinnedToBottom, let lastId = viewModel.messages.last?.id else { return }
+                proxy.scrollTo(lastId, anchor: .bottom)
             }
         }
     }
