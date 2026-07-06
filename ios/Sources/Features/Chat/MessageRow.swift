@@ -463,15 +463,15 @@ private struct TextBubble: View {
         if role == .user {
             return UnevenRoundedRectangle(
                 topLeadingRadius: 16,
-                bottomTrailingRadius: 4,
                 bottomLeadingRadius: 16,
+                bottomTrailingRadius: 4,
                 topTrailingRadius: 16
             )
         } else {
             return UnevenRoundedRectangle(
                 topLeadingRadius: 4,
-                bottomTrailingRadius: 16,
                 bottomLeadingRadius: 16,
+                bottomTrailingRadius: 16,
                 topTrailingRadius: 16
             )
         }
