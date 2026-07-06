@@ -15,23 +15,24 @@ struct MessageRow: View {
     var onRegenerate: (() -> Void)? = nil
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: 6) {
             if message.role == .assistant {
-                // Avatar del asistente (estilo scarf)
                 AssistantAvatar()
-                    .padding(.top, 2)
+                    .padding(.top, 4)
+            } else {
+                Spacer(minLength: 48)
             }
 
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
                 contentStack
-                messageActions
             }
+            .frame(maxWidth: 270, alignment: message.role == .user ? .trailing : .leading)
 
-            if message.role == .user {
-                Spacer(minLength: 40)
+            if message.role == .assistant {
+                Spacer(minLength: 48)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 3)
     }
 
     @ViewBuilder
@@ -62,31 +63,12 @@ struct MessageRow: View {
                 )
             }
         }
-        .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
-    }
-
-    @ViewBuilder
-    private var messageActions: some View {
-        if !message.isStreaming && message.role == .assistant && isLastAssistant {
-            if let onRegenerate {
-                Button(action: onRegenerate) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.clockwise")
-                        Text("Regenerar")
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-                .padding(.leading, 4)
-                .padding(.top, 2)
-            }
-        }
     }
 }
 
 // MARK: - Assistant avatar
 
-private struct AssistantAvatar: View {
+struct AssistantAvatar: View {
     var body: some View {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
             .fill(Color.green.opacity(0.15))
@@ -230,8 +212,9 @@ private struct ToolPill: View {
                     .lineLimit(showDetails ? nil : 1)
 
                 if tool.isRunning {
-                    ThinkingIndicator()
+                    ProgressView()
                         .scaleEffect(0.5)
+                        .frame(width: 12, height: 12)
                         .padding(.leading, 2)
                 } else if !tool.summary.isEmpty {
                     Image(systemName: showDetails ? "chevron.up" : "chevron.down")
@@ -425,7 +408,7 @@ struct AttachmentsGrid: View {
     }
 }
 
-// MARK: - Text bubble (esquinas asimetricas estilo scarf/AICat)
+// MARK: - Text bubble (efecto bocadillo con pico)
 
 private struct TextBubble: View {
     let text: String
@@ -434,27 +417,48 @@ private struct TextBubble: View {
     let onSaveMeal: (PendingMeal) async -> Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let extracted = PendingMeal.extract(from: text), let macros = extracted.macros {
-                if !extracted.cleaned.isEmpty {
-                    MarkdownView(text: extracted.cleaned)
-                }
-                MacrosCard(meal: macros, onSave: { editedMeal in
-                    await onSaveMeal(editedMeal)
-                })
-            } else {
-                MarkdownView(text: text)
+        HStack(alignment: .top, spacing: 0) {
+            if role == .assistant {
+                // Pico del bocadillo apuntando al avatar (izquierda)
+                BubbleTail(role: .assistant)
+                    .foregroundStyle(bubbleColor)
             }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(bg, in: bubbleShape)
-        .foregroundStyle(fg)
-        .contextMenu {
-            Button {
-                UIPasteboard.general.string = text
-            } label: {
-                Label("Copiar", systemImage: "doc.on.doc")
+
+            VStack(alignment: .leading, spacing: 6) {
+                if text.isEmpty && isStreaming {
+                    StreamingDots()
+                } else if let extracted = PendingMeal.extract(from: text), let macros = extracted.macros {
+                    if !extracted.cleaned.isEmpty {
+                        MarkdownView(text: extracted.cleaned)
+                    }
+                    MacrosCard(meal: macros, onSave: { editedMeal in
+                        await onSaveMeal(editedMeal)
+                    })
+                } else {
+                    MarkdownView(text: text)
+                    if isStreaming {
+                        StreamingDots()
+                            .padding(.top, 2)
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(bubbleColor, in: bubbleShape)
+            .foregroundStyle(textColor)
+            .contextMenu {
+                Button {
+                    UIPasteboard.general.string = text
+                } label: {
+                    Label("Copiar", systemImage: "doc.on.doc")
+                }
+            }
+
+            if role == .user {
+                Spacer(minLength: 0)
+                // Pico del bocadillo apuntando a la derecha
+                BubbleTail(role: .user)
+                    .foregroundStyle(bubbleColor)
             }
         }
     }
@@ -462,27 +466,103 @@ private struct TextBubble: View {
     private var bubbleShape: UnevenRoundedRectangle {
         if role == .user {
             return UnevenRoundedRectangle(
-                topLeadingRadius: 16,
-                bottomLeadingRadius: 16,
-                bottomTrailingRadius: 4,
-                topTrailingRadius: 16
+                topLeadingRadius: 18,
+                bottomLeadingRadius: 18,
+                bottomTrailingRadius: 18,
+                topTrailingRadius: 4
             )
         } else {
             return UnevenRoundedRectangle(
                 topLeadingRadius: 4,
-                bottomLeadingRadius: 16,
-                bottomTrailingRadius: 16,
-                topTrailingRadius: 16
+                bottomLeadingRadius: 18,
+                bottomTrailingRadius: 18,
+                topTrailingRadius: 18
             )
         }
     }
 
-    private var bg: Color {
+    private var bubbleColor: Color {
         role == .user ? Color.green.opacity(0.9) : Color(.secondarySystemBackground)
     }
 
-    private var fg: Color {
+    private var textColor: Color {
         role == .user ? .white : .primary
+    }
+}
+
+// MARK: - Pico del bocadillo
+
+private struct BubbleTail: View {
+    let role: ChatMessage.Role
+
+    var body: some View {
+        Triangle()
+            .fill(Color.clear)
+            .frame(width: 8, height: 10)
+            .overlay(
+                Triangle()
+                    .fill(tailColor)
+                    .frame(width: 8, height: 10)
+            )
+            .padding(.top, 10)
+    }
+
+    private var tailColor: Color {
+        role == .user ? Color.green.opacity(0.9) : Color(.secondarySystemBackground)
+    }
+}
+
+private struct Triangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        if rect.width > rect.height {
+            // Pico hacia la derecha (user)
+            path.move(to: CGPoint(x: 0, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+            path.addLine(to: CGPoint(x: 0, y: rect.maxY))
+        } else {
+            // Pico hacia la izquierda (assistant)
+            path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        }
+        path.closeSubpath()
+        return path
+    }
+}
+
+// MARK: - Streaming dots (3 puntos animados suaves)
+
+private struct StreamingDots: View {
+    @State private var phase: CGFloat = 0
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3) { i in
+                Circle()
+                    .fill(Color.secondary.opacity(0.5))
+                    .frame(width: 6, height: 6)
+                    .scaleEffect(scale(for: i))
+                    .opacity(opacity(for: i))
+            }
+        }
+        .onAppear {
+            withAnimation(.smooth(duration: 1.2).repeatForever(autoreverses: false)) {
+                phase = 1
+            }
+        }
+    }
+
+    private func scale(for index: Int) -> CGFloat {
+        let offset = CGFloat(index) / 3.0
+        let wave = sin((phase + offset) * .pi * 2)
+        return 0.6 + (wave + 1) * 0.3
+    }
+
+    private func opacity(for index: Int) -> CGFloat {
+        let offset = CGFloat(index) / 3.0
+        let wave = sin((phase + offset) * .pi * 2)
+        return 0.3 + (wave + 1) * 0.35
     }
 }
 

@@ -101,33 +101,38 @@ struct ChatView: View {
                         )
                         .id(msg.id)
                         .transition(.asymmetric(
-                            insertion: .move(edge: msg.role == .user ? .trailing : .leading)
-                                .combined(with: .opacity),
+                            insertion: .scale(scale: 0.95).combined(with: .opacity),
                             removal: .opacity
                         ))
                     }
                     // Indicador de thinking al final
                     if viewModel.isAgentThinking && (viewModel.messages.last?.content.isEmpty ?? true) {
-                        ThinkingIndicator()
-                            .padding(.leading, 52)
-                            .padding(.vertical, 4)
-                            .transition(.opacity.combined(with: .move(edge: .leading)))
+                        HStack(spacing: 6) {
+                            AssistantAvatar()
+                                .padding(.top, 2)
+                            ThinkingIndicator()
+                                .padding(10)
+                                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+                        }
+                        .padding(.vertical, 4)
+                        .transition(.scale(scale: 0.9).combined(with: .opacity))
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
             .defaultScrollAnchor(.bottom)
+            .scrollTargetLayout()
             .onChange(of: viewModel.messages.count) { _, _ in
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    proxy.scrollTo(viewModel.messages.last?.id, anchor: .bottom)
+                if let lastId = viewModel.messages.last?.id {
+                    withAnimation(.smooth(duration: 0.3)) {
+                        proxy.scrollTo(lastId, anchor: .bottom)
+                    }
                 }
             }
             .onChange(of: viewModel.messages.last?.content) { _, _ in
                 if let lastId = viewModel.messages.last?.id {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        proxy.scrollTo(lastId, anchor: .bottom)
-                    }
+                    proxy.scrollTo(lastId, anchor: .bottom)
                 }
             }
         }
@@ -234,27 +239,33 @@ struct ChatView: View {
     }
 }
 
-// MARK: - Thinking indicator (3 dots animados estilo AICat)
+// MARK: - Thinking indicator (onda suave estilo waveform)
 
 struct ThinkingIndicator: View {
-    @State private var animate = false
+    @State private var phase: CGFloat = 0
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(0..<3) { i in
-                Circle()
-                    .fill(Color.green.opacity(0.6))
-                    .frame(width: 7, height: 7)
-                    .scaleEffect(animate ? 1.0 : 0.5)
+            ForEach(0..<5) { i in
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.green.opacity(0.5))
+                    .frame(width: 4, height: barHeight(for: i))
                     .animation(
-                        .easeInOut(duration: 0.5)
-                            .repeatForever()
-                            .delay(Double(i) * 0.3),
-                        value: animate
+                        .smooth(duration: 0.8)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(i) * 0.12),
+                        value: phase
                     )
             }
         }
-        .onAppear { animate.toggle() }
+        .onAppear {
+            phase = 1
+        }
+    }
+
+    private func barHeight(for index: Int) -> CGFloat {
+        let heights: [CGFloat] = [8, 14, 20, 14, 8]
+        return heights[index]
     }
 }
 
