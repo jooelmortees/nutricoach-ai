@@ -25,6 +25,7 @@ final class ChatViewModel: ObservableObject {
             if currentConversationId == nil {
                 let id = try await agent.loadOrCreateLatestConversation()
                 currentConversationId = id
+                AppLogger.info("Conversacion cargada: \(id)")
             }
             if let convId = currentConversationId {
                 let history = try await agent.loadHistory(conversationId: convId)
@@ -38,9 +39,11 @@ final class ChatViewModel: ObservableObject {
                         isStreaming: false
                     )
                 }
+                AppLogger.info("Historial cargado: \(history.count) mensajes")
             }
         } catch {
-            errorMessage = "No se pudo cargar historial: \(error.localizedDescription)"
+            AppLogger.error("Error cargando conversacion: \(error)")
+            errorMessage = "No se pudo cargar el chat: \(error.localizedDescription)"
         }
     }
 
