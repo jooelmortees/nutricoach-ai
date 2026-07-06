@@ -221,11 +221,22 @@ enum MarkdownRenderer {
 
 struct MarkdownView: View {
     let text: String
+    var isStreaming: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(MarkdownRenderer.parse(text)) { block in
-                renderBlock(block)
+            if isStreaming {
+                // Durante streaming: texto plano para maxima fluidez.
+                // Re-parsear markdown en cada token es carisimo y congela la UI.
+                // Al terminar el stream se renderiza con markdown completo.
+                Text(text)
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ForEach(MarkdownRenderer.parse(text)) { block in
+                    renderBlock(block)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

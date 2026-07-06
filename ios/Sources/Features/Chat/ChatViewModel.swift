@@ -179,7 +179,7 @@ final class ChatViewModel: ObservableObject {
             // Throttle: acumular tokens y volcar a UI cada ~80ms
             // para evitar que SwiftUI congele en mensajes largos.
             if textThrottler == nil {
-                textThrottler = TextThrottler(interval: 0.08) { [weak self] chunk in
+                textThrottler = TextThrottler(interval: 0.03) { [weak self] chunk in
                     guard let self, let idx = self.messages.indices.last else { return }
                     self.messages[idx].content += chunk
                 }

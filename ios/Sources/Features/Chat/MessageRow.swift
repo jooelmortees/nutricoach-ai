@@ -380,13 +380,13 @@ private struct TextBubble: View {
                 TypingIndicator()
             } else if let extracted = PendingMeal.extract(from: text), let macros = extracted.macros {
                 if !extracted.cleaned.isEmpty {
-                    MarkdownView(text: extracted.cleaned)
+                    MarkdownView(text: extracted.cleaned, isStreaming: isStreaming)
                 }
                 MacrosCard(meal: macros, onSave: { editedMeal in
                     await onSaveMeal(editedMeal)
                 })
             } else {
-                MarkdownView(text: text)
+                MarkdownView(text: text, isStreaming: isStreaming)
             }
         }
         .padding(.horizontal, 14)
