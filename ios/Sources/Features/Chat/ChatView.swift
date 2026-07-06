@@ -1,20 +1,25 @@
 // ============================================================
-// ChatView - chat con el agente (streaming thinking + texto)
+// ChatView - chat con el agente (streaming thinking + texto + audio)
 // ============================================================
 
 import SwiftUI
 import PhotosUI
+import AVFoundation
 
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var viewModel = ChatViewModel()
+    @StateObject private var audioRecorder = AudioRecorder()
+    @StateObject private var speechTranscriber = SpeechTranscriber()
     @State private var inputText: String = ""
-    /// Seleccion multiple del PhotosPicker. NO se sube hasta enviar.
     @State private var selectedItems: [PhotosPickerItem] = []
     @FocusState private var inputFocused: Bool
-    /// Imagen abierta en fullscreen (tap en thumbnail).
     @State private var fullscreenImageURL: String?
     @State private var showClearConfirm: Bool = false
+    @State private var isPinnedToBottom: Bool = true
+    @State private var isRecordingAudio: Bool = false
+    @State private var pendingAudioURL: URL?
+    @State private var isTranscribing: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -30,10 +35,9 @@ struct ChatView: View {
                         Button {
                             Task { await viewModel.newConversation() }
                         } label: {
-                            Label("Nueva conversación", systemImage: "plus.bubble.fill")
+                            Label("Nueva conversacion", systemImage: "plus.bubble.fill")
                         }
                         Button {
-                            // Regenerar la ultima respuesta
                             Task { await viewModel.regenerateLastResponse() }
                         } label: {
                             Label("Regenerar respuesta", systemImage: "arrow.clockwise")
@@ -65,18 +69,18 @@ struct ChatView: View {
                     fullscreenImageURL = nil
                 }
             }
-            .confirmationDialog("¿Limpiar el chat?", isPresented: $showClearConfirm) {
+            .confirmationDialog("Limpiar el chat?", isPresented: $showClearConfirm) {
                 Button("Limpiar", role: .destructive) {
                     viewModel.clearConversation()
                 }
                 Button("Cancelar", role: .cancel) {}
             } message: {
-                Text("Se borrarán los mensajes de esta conversación en pantalla. La conversación seguirá existiendo en la base de datos.")
+                Text("Se borraran los mensajes de esta conversacion en pantalla. La conversacion seguira existiendo en la base de datos.")
             }
         }
     }
 
-    @State private var isPinnedToBottom: Bool = true
+    // MARK: - Messages list
 
     private var messagesList: some View {
         ScrollViewReader { proxy in
@@ -105,9 +109,6 @@ struct ChatView: View {
                 .padding(.vertical, 12)
             }
             .scrollDismissesKeyboard(.interactively)
-            .onPreferenceChange(ScrollAtBottomPreferenceKey.self) { pinned in
-                isPinnedToBottom = pinned
-            }
             // Auto-scroll solo cuando se anade un mensaje nuevo
             .onChange(of: viewModel.messages.count) { _, _ in
                 if let lastId = viewModel.messages.last?.id {
@@ -124,9 +125,11 @@ struct ChatView: View {
         }
     }
 
+    // MARK: - Input bar
+
     private var inputBar: some View {
-        VStack(spacing: 8) {
-            // Preview horizontal de imagenes pendientes (estilo Gemini)
+        VStack(spacing: 6) {
+            // Preview de imagenes pendientes
             if !viewModel.pendingAttachments.isEmpty {
                 PendingAttachmentsStrip(
                     attachments: viewModel.pendingAttachments,
@@ -134,9 +137,36 @@ struct ChatView: View {
                 )
                 .padding(.horizontal, 16)
             }
+
+            // Preview de audio grabado (antes de transcribir)
+            if let audioURL = pendingAudioURL, !isRecordingAudio {
+                AudioPreviewBar(
+                    url: audioURL,
+                    isTranscribing: isTranscribing,
+                    onSend: { Task { await sendAudio(url: audioURL) } },
+                    onCancel: {
+                        pendingAudioURL = nil
+                        try? FileManager.default.removeItem(at: audioURL)
+                    }
+                )
+                .padding(.horizontal, 16)
+            }
+
+            // Barra de grabacion en vivo (waveform)
+            if isRecordingAudio {
+                RecordingBar(
+                    amplitude: audioRecorder.amplitude,
+                    duration: audioRecorder.duration,
+                    onStop: { stopAudioRecording() },
+                    onCancel: { cancelAudioRecording() }
+                )
+                .padding(.horizontal, 16)
+            }
+
             Divider()
-            HStack(spacing: 12) {
-                // PhotosPicker multi-select: selectionLimit = nil -> ilimitadas
+
+            HStack(spacing: 10) {
+                // Picker de imagenes
                 PhotosPicker(
                     selection: $selectedItems,
                     maxSelectionCount: nil,
@@ -151,12 +181,26 @@ struct ChatView: View {
                 .onChange(of: selectedItems) { _, newItems in
                     Task {
                         await viewModel.handlePickedImages(newItems)
-                        // Limpiar la selección del PhotosPicker para poder
-                        // volver a seleccionar las mismas imagenes en otro envio
                         selectedItems = []
                     }
                 }
+                .disabled(isRecordingAudio || viewModel.isAgentThinking)
 
+                // Boton micro (grabar audio)
+                Button {
+                    if isRecordingAudio {
+                        stopAudioRecording()
+                    } else {
+                        startAudioRecording()
+                    }
+                } label: {
+                    Image(systemName: isRecordingAudio ? "stop.circle.fill" : "mic.circle")
+                        .font(.system(size: 26))
+                        .foregroundStyle(isRecordingAudio ? .red : .green)
+                }
+                .disabled(viewModel.isAgentThinking)
+
+                // Campo de texto
                 TextField(
                     inputPlaceholder,
                     text: $inputText,
@@ -172,7 +216,9 @@ struct ChatView: View {
                 .onSubmit {
                     Task { await send() }
                 }
+                .disabled(isRecordingAudio)
 
+                // Boton enviar
                 Button {
                     Task { await send() }
                 } label: {
@@ -187,39 +233,75 @@ struct ChatView: View {
         }
         .background(.bar)
         .animation(.easeInOut(duration: 0.2), value: viewModel.pendingAttachments.count)
+        .animation(.easeInOut(duration: 0.2), value: isRecordingAudio)
+        .animation(.easeInOut(duration: 0.2), value: pendingAudioURL != nil)
     }
 
     private var inputPlaceholder: String {
-        viewModel.pendingAttachments.isEmpty
-            ? "Pregúntale a tu dietista..."
-            : "Escribe tu pregunta..."
+        if isRecordingAudio { return "Grabando audio..." }
+        if viewModel.pendingAttachments.isEmpty { return "Preguntale a tu dietista..." }
+        return "Escribe tu pregunta..."
     }
 
     private var canSend: Bool {
         let hasText = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasAttachments = !viewModel.pendingAttachments.isEmpty
-        return (hasText || hasAttachments) && !viewModel.isAgentThinking
+        let hasAudio = pendingAudioURL != nil
+        return (hasText || hasAttachments || hasAudio) && !viewModel.isAgentThinking && !isRecordingAudio && !isTranscribing
     }
 
+    // MARK: - Send
+
     private func send() async {
-        // Limpiar inputText, focus y selectedItems ANTES del await para que
-        // el UI se sienta inmediato y no parezca que el boton "no hace nada"
-        // (que era el bug reportado: el texto se quedaba y habia que cerrar
-        // la app si el stream se colgaba sin 'done').
         let text = inputText
         inputText = ""
         inputFocused = false
         await viewModel.send(text: text)
     }
 
-    /// True si el mensaje en `index` es el ULTIMO mensaje del asistente
-    /// (no streaming). Solo ese muestra el boton "Regenerar".
+    private func sendAudio(url: URL) async {
+        isTranscribing = true
+        // Transcribir audio a texto
+        let transcribed = await speechTranscriber.transcribe(audioURL: url)
+        isTranscribing = false
+
+        if let text = transcribed, !text.isEmpty {
+            await viewModel.send(text: text)
+        } else {
+            viewModel.errorMessage = speechTranscriber.errorMessage ?? "No se pudo transcribir el audio"
+        }
+
+        // Limpiar
+        pendingAudioURL = nil
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    // MARK: - Audio recording
+
+    private func startAudioRecording() {
+        audioRecorder.startRecording()
+        isRecordingAudio = true
+    }
+
+    private func stopAudioRecording() {
+        audioRecorder.stopRecording()
+        isRecordingAudio = false
+        pendingAudioURL = audioRecorder.audioURL
+    }
+
+    private func cancelAudioRecording() {
+        audioRecorder.cancelRecording()
+        isRecordingAudio = false
+        pendingAudioURL = nil
+    }
+
+    // MARK: - Helpers
+
     private func isLastAssistant(index: Int) -> Bool {
         let msgs = viewModel.messages
         guard index < msgs.count else { return false }
         guard msgs[index].role == .assistant else { return false }
         guard !msgs[index].isStreaming else { return false }
-        // Verificar que no hay otro assistant despues
         for i in (index + 1)..<msgs.count {
             if msgs[i].role == .assistant && !msgs[i].isStreaming {
                 return false
@@ -229,14 +311,113 @@ struct ChatView: View {
     }
 }
 
-/// Wrapper Identifiable para usar .sheet(item:) con un String.
+// MARK: - Recording bar (waveform en vivo)
+
+struct RecordingBar: View {
+    let amplitude: CGFloat
+    let duration: TimeInterval
+    let onStop: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            // Waveform animado
+            HStack(spacing: 2) {
+                ForEach(0..<20, id: \.self) { i in
+                    Capsule()
+                        .fill(Color.red)
+                        .frame(width: 3, height: barHeight(i))
+                        .animation(.easeOut(duration: 0.05), value: amplitude)
+                }
+            }
+            .frame(height: 32)
+
+            Text(String(format: "%d:%02d", Int(duration) / 60, Int(duration) % 60))
+                .font(.caption)
+                .foregroundStyle(.red)
+                .monospacedDigit()
+
+            Spacer()
+
+            Button(action: onCancel) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button(action: onStop) {
+                Image(systemName: "stop.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func barHeight(_ index: Int) -> CGFloat {
+        // Variar altura de cada barra segun amplitud + offset del indice
+        let offset = CGFloat(index) * 0.05
+        let base = max(4, amplitude * 32 + offset * 8)
+        return min(base, 32)
+    }
+}
+
+// MARK: - Audio preview bar (antes de enviar)
+
+struct AudioPreviewBar: View {
+    let url: URL
+    let isTranscribing: Bool
+    let onSend: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if isTranscribing {
+                ProgressView()
+                    .scaleEffect(0.8)
+                Text("Transcribiendo...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Image(systemName: "waveform.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.green)
+                Text("Audio listo para enviar")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button(action: onCancel) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !isTranscribing {
+                Button(action: onSend) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.green)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+// MARK: - Helpers
+
 private struct ImageViewerID: Identifiable {
     let url: String
     var id: String { url }
 }
 
-/// Strip horizontal de previews de imagenes pendientes (estilo Gemini).
-/// Solo muestra las imagenes, sin texto. Cada una con boton X para quitar.
 struct PendingAttachmentsStrip: View {
     let attachments: [PendingAttachment]
     let onRemove: (UUID) -> Void
@@ -251,7 +432,6 @@ struct PendingAttachmentsStrip: View {
                             .scaledToFill()
                             .frame(width: 72, height: 72)
                             .clipShape(RoundedRectangle(cornerRadius: 10))
-                        // Boton X encima de la imagen
                         Button {
                             onRemove(att.id)
                         } label: {
@@ -266,27 +446,6 @@ struct PendingAttachmentsStrip: View {
             .padding(.horizontal, 2)
             .padding(.vertical, 4)
         }
-    }
-}
-
-// MARK: - Preference key para detectar si el scroll esta al final
-
-struct ScrollAtBottomPreferenceKey: PreferenceKey {
-    static var defaultValue: Bool = true
-    static func reduce(value: inout Bool, nextValue: () -> Bool) {
-        value = nextValue()
-    }
-}
-
-struct ScrollAtBottomDetector: View {
-    var body: some View {
-        GeometryReader { proxy in
-            Color.clear.preference(
-                key: ScrollAtBottomPreferenceKey.self,
-                value: proxy.frame(in: .global).maxY > UIScreen.main.bounds.height - 200
-            )
-        }
-        .frame(height: 1)
     }
 }
 
@@ -316,7 +475,6 @@ struct ErrorBanner: View {
     }
 }
 
-/// Vista fullscreen para ampliar una imagen del chat (tap en thumbnail).
 struct FullScreenImageView: View {
     let url: String
     let onClose: () -> Void
@@ -346,7 +504,6 @@ struct FullScreenImageView: View {
                     EmptyView()
                 }
             }
-            // Boton cerrar (X) arriba a la derecha
             VStack {
                 HStack {
                     Spacer()

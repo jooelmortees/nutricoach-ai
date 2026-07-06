@@ -1,5 +1,7 @@
 // ============================================================
-// MessageRow - celda individual del chat
+// MessageRow - celda individual del chat redisenada
+// Estilo opencode: bloques separados y plegables para thinking,
+// tools y texto. Cada bloque es visualmente distinto.
 // ============================================================
 
 import SwiftUI
@@ -8,54 +10,47 @@ struct MessageRow: View {
     let message: ChatMessage
     let onImageTap: (String) -> Void
     let onSaveMeal: (PendingMeal) async -> Bool
-    /// Callback para "Regenerar" (solo en el ultimo mensaje del asistente).
     var onRegenerate: (() -> Void)? = nil
-    /// Callback para "Reintentar" (solo si el mensaje fallo).
     var onRetry: (() -> Void)? = nil
 
     var body: some View {
-        HStack(alignment: .top) {
-            if message.role == .user {
-                Spacer(minLength: 60)
+        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 8) {
+            // Imagenes adjuntas (siempre arriba)
+            if let attachments = message.attachments, !attachments.isEmpty {
+                AttachmentsGrid(attachments: attachments, onImageTap: onImageTap)
             }
 
-            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
-                // Thinking oculto en pantalla (plegable tras "Ver razonamiento")
-                if let thinking = message.thinking, !thinking.isEmpty {
-                    ThinkingBubble(text: thinking)
-                }
-                // Imagenes adjuntas
-                if let attachments = message.attachments, !attachments.isEmpty {
-                    AttachmentsGrid(attachments: attachments, onImageTap: onImageTap)
-                }
-                // Estado de tools en ejecucion (mientras el agente usa tools)
-                if let toolStatus = message.toolStatus, !toolStatus.isEmpty {
-                    ToolStatusIndicator(tools: toolStatus)
-                }
-                // Burbuja de texto con markdown + deteccion de macros
+            // Bloque thinking (plegable, solo assistant)
+            if let thinking = message.thinking, !thinking.isEmpty {
+                ThinkingBlock(text: thinking)
+            }
+
+            // Bloque tools (estilo opencode: seccion con bordes)
+            if let toolStatus = message.toolStatus, !toolStatus.isEmpty {
+                ToolBlock(tools: toolStatus)
+            }
+
+            // Burbuja de texto principal
+            if !message.content.isEmpty || message.isStreaming {
                 TextBubble(
                     text: message.content,
                     role: message.role,
                     isStreaming: message.isStreaming,
                     onSaveMeal: onSaveMeal
                 )
-                // Acciones debajo del mensaje (regenerar para assistant,
-                // reintentar para user que fallo)
-                messageActions
             }
 
-            if message.role == .assistant {
-                Spacer(minLength: 60)
-            }
+            // Acciones debajo del mensaje
+            messageActions
         }
+        .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+        .padding(.horizontal, message.role == .user ? 60 : 0)
     }
 
     @ViewBuilder
     private var messageActions: some View {
-        // Solo mostrar acciones si el mensaje no esta streaming
         if !message.isStreaming {
             HStack(spacing: 12) {
-                // Boton regenerar (solo en assistant messages)
                 if message.role == .assistant, let onRegenerate {
                     Button(action: onRegenerate) {
                         HStack(spacing: 4) {
@@ -66,7 +61,6 @@ struct MessageRow: View {
                         .foregroundStyle(.secondary)
                     }
                 }
-                // Boton reintentar (solo en user messages con error)
                 if message.role == .user, let onRetry {
                     Button(action: onRetry) {
                         HStack(spacing: 4) {
@@ -83,7 +77,132 @@ struct MessageRow: View {
     }
 }
 
-// MARK: - Macros detectadas
+// MARK: - Bloque Thinking (plegable, estilo opencode)
+
+struct ThinkingBlock: View {
+    let text: String
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "brain.head.profile")
+                        .font(.caption2)
+                    Text(isExpanded ? "Ocultar razonamiento" : "Ver razonamiento")
+                        .font(.caption2)
+                    if !isExpanded {
+                        Text(truncatedPreview)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                }
+                .foregroundStyle(.purple)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(Color.purple.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 6)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .background(Color.purple.opacity(0.03), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var truncatedPreview: String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count <= 50 {
+            return trimmed
+        }
+        return String(trimmed.prefix(50)) + "..."
+    }
+}
+
+// MARK: - Bloque Tools (estilo opencode: bordes + seccion)
+
+struct ToolBlock: View {
+    let tools: [ToolStatus]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(tools) { tool in
+                HStack(spacing: 6) {
+                    Image(systemName: toolIcon(tool.name))
+                        .font(.caption2)
+                        .foregroundStyle(.blue)
+
+                    Text(tool.summary.isEmpty ? toolLabel(tool.name) : tool.summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    if tool.isRunning {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                            .frame(width: 12, height: 12)
+                    } else {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+            }
+        }
+        .background(Color.blue.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.blue.opacity(0.1), lineWidth: 0.5)
+        )
+    }
+
+    private func toolIcon(_ name: String) -> String {
+        switch name {
+        case "get_user_profile": return "person.crop.circle"
+        case "get_recent_meals": return "fork.knife"
+        case "get_health_metrics": return "heart.text.square"
+        case "remember_fact": return "brain"
+        case "web_search": return "magnifyingglass"
+        case "calculate_daily_target": return "target"
+        default: return "wrench.and.screwdriver"
+        }
+    }
+
+    private func toolLabel(_ name: String) -> String {
+        switch name {
+        case "get_user_profile": return "Consultando tu perfil"
+        case "get_recent_meals": return "Revisando comidas recientes"
+        case "get_health_metrics": return "Leyendo metricas de salud"
+        case "remember_fact": return "Guardando en memoria"
+        case "web_search": return "Buscando informacion"
+        case "calculate_daily_target": return "Calculando objetivo diario"
+        default: return "Procesando"
+        }
+    }
+}
+
+// MARK: - Macros detectadas (PendingMeal + extract)
 
 struct PendingMeal: Codable, Equatable {
     var description: String
@@ -95,11 +214,8 @@ struct PendingMeal: Codable, Equatable {
     var confidence: Double?
     var ingredients: [PendingIngredient]?
 
-    /// Busca un JSON de macros en el texto y lo extrae.
-    /// Formato esperado: `{"description": "...", "kcal": N, "protein_g": N, ...}`
     static func extract(from text: String) -> (cleaned: String, macros: PendingMeal?)? {
         guard let jsonStart = text.firstIndex(of: "{") else { return nil }
-        // Buscar el final del JSON (matching braces basico)
         var depth = 0
         var inString = false
         var escape = false
@@ -115,19 +231,16 @@ struct PendingMeal: Codable, Equatable {
         }
         guard let jsonEnd else { return nil }
         let jsonStr = String(text[jsonStart...jsonEnd])
-        // El texto a quitar incluye el JSON + espacios/newlines alrededor
         let before = text[text.startIndex..<jsonStart]
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let after = text[text.index(after: jsonEnd)...]
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let cleaned = [before, after].filter { !$0.isEmpty }.joined(separator: "\n\n")
 
-        // Parsear JSON
         guard let data = jsonStr.data(using: .utf8),
               let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-        // Parsear ingredientes
         var ingredients: [PendingIngredient] = []
         if let ingredientsArray = parsed["ingredients"] as? [[String: Any]] {
             for ing in ingredientsArray {
@@ -161,6 +274,17 @@ struct PendingIngredient: Codable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case name, quantity, unit
+    }
+}
+
+struct ToolStatus: Identifiable, Equatable {
+    let id = UUID()
+    let name: String
+    var summary: String
+    var isRunning: Bool
+
+    static func == (lhs: ToolStatus, rhs: ToolStatus) -> Bool {
+        lhs.id == rhs.id
     }
 }
 
@@ -242,86 +366,6 @@ struct AttachmentsGrid: View {
     }
 }
 
-// MARK: - Indicador de tools en ejecucion
-
-struct ToolStatusIndicator: View {
-    let tools: [ToolStatus]
-    @State private var dots: Int = 1
-    private let timer = Timer.publish(every: 0.45, on: .main, in: .common).autoconnect()
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(tools) { tool in
-                HStack(spacing: 6) {
-                    Image(systemName: toolIcon(tool.name))
-                        .font(.caption2)
-                        .foregroundStyle(.blue)
-                    Text(tool.summary.isEmpty ? toolLabel(tool.name) : tool.summary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if tool.isRunning {
-                        HStack(spacing: 2) {
-                            ForEach(0..<3) { i in
-                                Circle()
-                                    .fill(.secondary)
-                                    .frame(width: 3, height: 3)
-                                    .opacity(i < dots ? 1.0 : 0.3)
-                            }
-                        }
-                        .onReceive(timer) { _ in
-                            dots = (dots % 3) + 1
-                        }
-                    } else {
-                        Image(systemName: "checkmark")
-                            .font(.caption2)
-                            .foregroundStyle(.green)
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color.blue.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    /// Icono SF Symbol para cada tool
-    private func toolIcon(_ name: String) -> String {
-        switch name {
-        case "get_user_profile": return "person.crop.circle"
-        case "get_recent_meals": return "fork.knife"
-        case "get_health_metrics": return "heart.text.square"
-        case "remember_fact": return "brain"
-        case "web_search": return "magnifyingglass"
-        case "calculate_daily_target": return "target"
-        default: return "wrench.and.screwdriver"
-        }
-    }
-
-    /// Etiqueta legible para cada tool
-    private func toolLabel(_ name: String) -> String {
-        switch name {
-        case "get_user_profile": return "Consultando tu perfil"
-        case "get_recent_meals": return "Revisando tus comidas recientes"
-        case "get_health_metrics": return "Leyendo tus métricas de salud"
-        case "remember_fact": return "Guardando en memoria"
-        case "web_search": return "Buscando información"
-        case "calculate_daily_target": return "Calculando tu objetivo diario"
-        default: return "Procesando"
-        }
-    }
-}
-
-struct ToolStatus: Identifiable, Equatable {
-    let id = UUID()
-    let name: String
-    var summary: String
-    var isRunning: Bool
-
-    static func == (lhs: ToolStatus, rhs: ToolStatus) -> Bool {
-        lhs.id == rhs.id
-    }
-}
-
 // MARK: - Burbuja de texto (con markdown + deteccion de macros)
 
 private struct TextBubble: View {
@@ -335,14 +379,12 @@ private struct TextBubble: View {
             if text.isEmpty && isStreaming {
                 TypingIndicator()
             } else if let extracted = PendingMeal.extract(from: text), let macros = extracted.macros {
-                VStack(alignment: .leading, spacing: 8) {
-                    if !extracted.cleaned.isEmpty {
-                        MarkdownView(text: extracted.cleaned)
-                    }
-                    MacrosCard(meal: macros, onSave: { editedMeal in
-                        await onSaveMeal(editedMeal)
-                    })
+                if !extracted.cleaned.isEmpty {
+                    MarkdownView(text: extracted.cleaned)
                 }
+                MacrosCard(meal: macros, onSave: { editedMeal in
+                    await onSaveMeal(editedMeal)
+                })
             } else {
                 MarkdownView(text: text)
             }
@@ -370,7 +412,7 @@ private struct TextBubble: View {
     }
 }
 
-// MARK: - Tarjeta de macros (visible cuando se detecta JSON)
+// MARK: - Tarjeta de macros
 
 private struct MacrosCard: View {
     let meal: PendingMeal
@@ -414,7 +456,7 @@ private struct MacrosCard: View {
             Button(action: { showEditor = true }) {
                 HStack {
                     Image(systemName: saved ? "checkmark.circle.fill" : "square.and.pencil")
-                    Text(saved ? "Guardado en tu día" : "Revisar y guardar")
+                    Text(saved ? "Guardado en tu dia" : "Revisar y guardar")
                 }
                 .font(.subheadline)
                 .fontWeight(.medium)
@@ -470,56 +512,5 @@ private struct MacroPill: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 4)
         .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-// MARK: - Thinking bubble (plegable inline, sin popover)
-
-private struct ThinkingBubble: View {
-    let text: String
-    @State private var isExpanded: Bool = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: isExpanded ? "chevron.down" : "brain.head.profile")
-                        .font(.caption2)
-                    Text(isExpanded ? "Ocultar razonamiento" : "Ver razonamiento")
-                        .font(.caption2)
-                    if !isExpanded {
-                        Text("\u{2022} \(truncatedPreview)")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                    }
-                }
-                .foregroundStyle(.purple)
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                Text(text)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .background(Color.purple.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-    }
-
-    /// Preview truncado para mostrar cuando esta colapsado
-    private var truncatedPreview: String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.count <= 60 {
-            return trimmed
-        }
-        return String(trimmed.prefix(60)) + "..."
     }
 }
