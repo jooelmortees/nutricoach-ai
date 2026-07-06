@@ -1,37 +1,59 @@
 // ============================================================
-// MessageRow - celda individual del chat redisenada
-// Estilo opencode: bloques separados y plegables para thinking,
-// tools y texto. Cada bloque es visualmente distinto.
+// MessageRow - celda individual del chat (rediseno completo)
+// Patrones: avatar + esquinas asimetricas (scarf/AICat),
+// tools colapsables con color por tipo (Sidekick/scarf),
+// thinking colapsable con preview (hanlin-ai)
 // ============================================================
 
 import SwiftUI
 
 struct MessageRow: View {
     let message: ChatMessage
+    let isLastAssistant: Bool
     let onImageTap: (String) -> Void
     let onSaveMeal: (PendingMeal) async -> Bool
     var onRegenerate: (() -> Void)? = nil
-    var onRetry: (() -> Void)? = nil
 
     var body: some View {
-        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 8) {
-            // Imagenes adjuntas (siempre arriba)
+        HStack(alignment: .top, spacing: 8) {
+            if message.role == .assistant {
+                // Avatar del asistente (estilo scarf)
+                AssistantAvatar()
+                    .padding(.top, 2)
+            }
+
+            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
+                contentStack
+                messageActions
+            }
+
+            if message.role == .user {
+                Spacer(minLength: 40)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var contentStack: some View {
+        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
+            // Thinking colapsable (estilo hanlin-ai)
+            if let thinking = message.thinking, !thinking.isEmpty, message.role == .assistant {
+                ThinkingSection(text: thinking, isStreaming: message.isStreaming)
+            }
+
+            // Imagenes adjuntas
             if let attachments = message.attachments, !attachments.isEmpty {
                 AttachmentsGrid(attachments: attachments, onImageTap: onImageTap)
             }
 
-            // Bloque thinking (plegable, solo assistant)
-            if let thinking = message.thinking, !thinking.isEmpty {
-                ThinkingBlock(text: thinking)
-            }
-
-            // Bloque tools (estilo opencode: seccion con bordes)
+            // Tools en ejecucion (estilo Sidekick/scarf)
             if let toolStatus = message.toolStatus, !toolStatus.isEmpty {
-                ToolBlock(tools: toolStatus)
+                ToolStepsSection(tools: toolStatus)
             }
 
-            // Burbuja de texto principal
-            if !message.content.isEmpty || message.isStreaming {
+            // Burbuja de texto con markdown + deteccion de macros
+            if !message.content.isEmpty || !message.isStreaming {
                 TextBubble(
                     text: message.content,
                     role: message.role,
@@ -39,170 +61,220 @@ struct MessageRow: View {
                     onSaveMeal: onSaveMeal
                 )
             }
-
-            // Acciones debajo del mensaje
-            messageActions
         }
         .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
-        .padding(.horizontal, message.role == .user ? 60 : 0)
     }
 
     @ViewBuilder
     private var messageActions: some View {
-        if !message.isStreaming {
-            HStack(spacing: 12) {
-                if message.role == .assistant, let onRegenerate {
-                    Button(action: onRegenerate) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.clockwise")
-                            Text("Regenerar")
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        if !message.isStreaming && message.role == .assistant && isLastAssistant {
+            if let onRegenerate {
+                Button(action: onRegenerate) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise")
+                        Text("Regenerar")
                     }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
-                if message.role == .user, let onRetry {
-                    Button(action: onRetry) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "exclamationmark.triangle")
-                            Text("Reintentar")
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                    }
-                }
+                .padding(.leading, 4)
+                .padding(.top, 2)
             }
-            .padding(.horizontal, 4)
         }
     }
 }
 
-// MARK: - Bloque Thinking (plegable, estilo opencode)
+// MARK: - Assistant avatar
 
-struct ThinkingBlock: View {
+private struct AssistantAvatar: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Color.green.opacity(0.15))
+            .frame(width: 28, height: 28)
+            .overlay(
+                Image(systemName: "leaf.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.green)
+            )
+    }
+}
+
+// MARK: - Thinking section (estilo hanlin-ai: colapsable + preview)
+
+private struct ThinkingSection: View {
     let text: String
+    let isStreaming: Bool
     @State private var isExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 4) {
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     isExpanded.toggle()
                 }
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "brain.head.profile")
+                HStack(spacing: 4) {
+                    Image(systemName: isStreaming ? "brain.head.profile" : (isExpanded ? "chevron.down" : "brain.head.profile"))
                         .font(.caption2)
-                    Text(isExpanded ? "Ocultar razonamiento" : "Ver razonamiento")
-                        .font(.caption2)
-                    if !isExpanded {
-                        Text(truncatedPreview)
+                    if isStreaming {
+                        Text("Pensando...")
+                            .font(.caption2)
+                    } else {
+                        Text(isExpanded ? "Ocultar razonamiento" : "Razonamiento")
+                            .font(.caption2)
+                    }
+                    if !isExpanded && !isStreaming {
+                        Text("- \(preview)")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
                     }
-                    Spacer()
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
                 }
                 .foregroundStyle(.purple)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
             }
             .buttonStyle(.plain)
 
             if isExpanded {
-                Text(text)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .background(Color.purple.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
-                    .padding(.horizontal, 6)
-                    .padding(.bottom, 6)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                ScrollView(.vertical, showsIndicators: true) {
+                    Text(text)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 150)
+                .padding(8)
+                .background(Color.purple.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .background(Color.purple.opacity(0.03), in: RoundedRectangle(cornerRadius: 10))
     }
 
-    private var truncatedPreview: String {
+    private var preview: String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.count <= 50 {
-            return trimmed
-        }
-        return String(trimmed.prefix(50)) + "..."
+        return trimmed.count <= 50 ? trimmed : String(trimmed.prefix(50)) + "..."
     }
 }
 
-// MARK: - Bloque Tools (estilo opencode: bordes + seccion)
+// MARK: - Tool steps section (estilo Sidekick/scarf: pills con color por tipo)
 
-struct ToolBlock: View {
+private struct ToolStepsSection: View {
     let tools: [ToolStatus]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(tools) { tool in
-                HStack(spacing: 6) {
-                    Image(systemName: toolIcon(tool.name))
-                        .font(.caption2)
-                        .foregroundStyle(.blue)
-
-                    Text(tool.summary.isEmpty ? toolLabel(tool.name) : tool.summary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-
-                    Spacer()
-
-                    if tool.isRunning {
-                        ProgressView()
-                            .scaleEffect(0.6)
-                            .frame(width: 12, height: 12)
-                    } else {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.green)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                ToolPill(tool: tool)
             }
         }
-        .background(Color.blue.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.blue.opacity(0.1), lineWidth: 0.5)
-        )
+    }
+}
+
+private struct ToolPill: View {
+    let tool: ToolStatus
+    @State private var showDetails = false
+
+    private var kindColor: Color {
+        switch tool.name {
+        case "web_search": return Color.blue
+        case "remember_fact": return Color.purple
+        case "calculate_daily_target": return Color.orange
+        case "get_user_profile", "get_recent_meals", "get_health_metrics": return Color.green
+        case "generate_meal_plan": return Color.teal
+        default: return Color.gray
+        }
     }
 
-    private func toolIcon(_ name: String) -> String {
-        switch name {
+    private var iconName: String {
+        switch tool.name {
         case "get_user_profile": return "person.crop.circle"
         case "get_recent_meals": return "fork.knife"
         case "get_health_metrics": return "heart.text.square"
         case "remember_fact": return "brain"
         case "web_search": return "magnifyingglass"
         case "calculate_daily_target": return "target"
+        case "generate_meal_plan": return "calendar"
         default: return "wrench.and.screwdriver"
         }
     }
 
-    private func toolLabel(_ name: String) -> String {
-        switch name {
+    private var label: String {
+        switch tool.name {
         case "get_user_profile": return "Consultando tu perfil"
-        case "get_recent_meals": return "Revisando comidas recientes"
-        case "get_health_metrics": return "Leyendo metricas de salud"
+        case "get_recent_meals": return "Revisando tus comidas recientes"
+        case "get_health_metrics": return "Leyendo tus metricas de salud"
         case "remember_fact": return "Guardando en memoria"
         case "web_search": return "Buscando informacion"
-        case "calculate_daily_target": return "Calculando objetivo diario"
+        case "calculate_daily_target": return "Calculando tu objetivo diario"
+        case "generate_meal_plan": return "Generando plan de comidas"
         default: return "Procesando"
         }
     }
+
+    var body: some View {
+        Button {
+            if !tool.summary.isEmpty {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    showDetails.toggle()
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: iconName)
+                    .font(.caption2)
+                    .foregroundStyle(kindColor)
+
+                Text(tool.summary.isEmpty ? label : tool.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(showDetails ? nil : 1)
+
+                if tool.isRunning {
+                    ThinkingIndicator()
+                        .scaleEffect(0.5)
+                        .padding(.leading, 2)
+                } else if !tool.summary.isEmpty {
+                    Image(systemName: showDetails ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.tertiary)
+                }
+
+                if !tool.isRunning && tool.summary.isEmpty {
+                    Image(systemName: "checkmark")
+                        .font(.caption2)
+                        .foregroundStyle(.green)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(kindColor.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(kindColor.opacity(0.2), lineWidth: 0.5)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(tool.summary.isEmpty)
+    }
 }
 
-// MARK: - Macros detectadas (PendingMeal + extract)
+// MARK: - ToolStatus
+
+struct ToolStatus: Identifiable, Equatable {
+    let id = UUID()
+    let name: String
+    var summary: String
+    var isRunning: Bool
+
+    static func == (lhs: ToolStatus, rhs: ToolStatus) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+// MARK: - Macros detection (PendingMeal)
 
 struct PendingMeal: Codable, Equatable {
     var description: String
@@ -231,10 +303,8 @@ struct PendingMeal: Codable, Equatable {
         }
         guard let jsonEnd else { return nil }
         let jsonStr = String(text[jsonStart...jsonEnd])
-        let before = text[text.startIndex..<jsonStart]
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let after = text[text.index(after: jsonEnd)...]
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let before = text[text.startIndex..<jsonStart].trimmingCharacters(in: .whitespacesAndNewlines)
+        let after = text[text.index(after: jsonEnd)...].trimmingCharacters(in: .whitespacesAndNewlines)
         let cleaned = [before, after].filter { !$0.isEmpty }.joined(separator: "\n\n")
 
         guard let data = jsonStr.data(using: .utf8),
@@ -277,25 +347,14 @@ struct PendingIngredient: Codable, Equatable, Identifiable {
     }
 }
 
-struct ToolStatus: Identifiable, Equatable {
-    let id = UUID()
-    let name: String
-    var summary: String
-    var isRunning: Bool
-
-    static func == (lhs: ToolStatus, rhs: ToolStatus) -> Bool {
-        lhs.id == rhs.id
-    }
-}
-
-// MARK: - Grid de imagenes adjuntas
+// MARK: - Attachments grid
 
 struct AttachmentsGrid: View {
     let attachments: [MessageAttachment]
     let onImageTap: (String) -> Void
 
     private let thumbSize: CGFloat = 70
-    private let cornerRadius: CGFloat = 8
+    private let cornerRadius: CGFloat = 10
 
     var body: some View {
         let images = attachments.filter { $0.type == "image" }
@@ -366,7 +425,7 @@ struct AttachmentsGrid: View {
     }
 }
 
-// MARK: - Burbuja de texto (con markdown + deteccion de macros)
+// MARK: - Text bubble (esquinas asimetricas estilo scarf/AICat)
 
 private struct TextBubble: View {
     let text: String
@@ -375,25 +434,22 @@ private struct TextBubble: View {
     let onSaveMeal: (PendingMeal) async -> Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if text.isEmpty && isStreaming {
-                TypingIndicator()
-            } else if let extracted = PendingMeal.extract(from: text), let macros = extracted.macros {
+        VStack(alignment: .leading, spacing: 6) {
+            if let extracted = PendingMeal.extract(from: text), let macros = extracted.macros {
                 if !extracted.cleaned.isEmpty {
-                    MarkdownView(text: extracted.cleaned, isStreaming: isStreaming)
+                    MarkdownView(text: extracted.cleaned)
                 }
                 MacrosCard(meal: macros, onSave: { editedMeal in
                     await onSaveMeal(editedMeal)
                 })
             } else {
-                MarkdownView(text: text, isStreaming: isStreaming)
+                MarkdownView(text: text)
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(bg, in: RoundedRectangle(cornerRadius: 16))
+        .background(bg, in: bubbleShape)
         .foregroundStyle(fg)
-        .frame(maxWidth: .infinity, alignment: role == .user ? .trailing : .leading)
         .contextMenu {
             Button {
                 UIPasteboard.general.string = text
@@ -403,8 +459,26 @@ private struct TextBubble: View {
         }
     }
 
+    private var bubbleShape: UnevenRoundedRectangle {
+        if role == .user {
+            return UnevenRoundedRectangle(
+                topLeadingRadius: 16,
+                bottomTrailingRadius: 4,
+                bottomLeadingRadius: 16,
+                topTrailingRadius: 16
+            )
+        } else {
+            return UnevenRoundedRectangle(
+                topLeadingRadius: 4,
+                bottomTrailingRadius: 16,
+                bottomLeadingRadius: 16,
+                topTrailingRadius: 16
+            )
+        }
+    }
+
     private var bg: Color {
-        role == .user ? .green : Color(.secondarySystemBackground)
+        role == .user ? Color.green.opacity(0.9) : Color(.secondarySystemBackground)
     }
 
     private var fg: Color {
@@ -412,7 +486,7 @@ private struct TextBubble: View {
     }
 }
 
-// MARK: - Tarjeta de macros
+// MARK: - Macros card
 
 private struct MacrosCard: View {
     let meal: PendingMeal
@@ -438,7 +512,7 @@ private struct MacrosCard: View {
                     .lineLimit(2)
             }
 
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 if let kcal = meal.kcal {
                     MacroPill(label: "kcal", value: "\(Int(kcal))", color: .orange)
                 }
@@ -477,13 +551,6 @@ private struct MacrosCard: View {
                         return ok
                     }
                 )
-            }
-            .onChange(of: saved) { _, newValue in
-                if newValue {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        saved = false
-                    }
-                }
             }
         }
         .padding(12)
