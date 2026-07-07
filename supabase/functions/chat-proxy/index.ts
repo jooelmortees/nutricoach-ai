@@ -221,6 +221,9 @@ serve(async (req) => {
                   }
 
                   // 3. tool_calls (function calling)
+                  //    Gemini anade extra_content.google.thought_signature a cada
+                  //    tool_call. Es OBLIGATORIO reenviarlo en el assistant message
+                  //    del historial para la siguiente iteracion (si no, error 400).
                   if (delta?.tool_calls) {
                     for (const tc of delta.tool_calls) {
                       const idx = tc.index ?? toolCalls.length;
@@ -228,12 +231,16 @@ serve(async (req) => {
                         toolCalls[idx] = {
                           id: tc.id,
                           type: "function",
-                          function: { name: "", arguments: "" }
+                          function: { name: "", arguments: "" },
+                          thought_signature: null as string | null,
                         };
                       }
                       if (tc.id) toolCalls[idx].id = tc.id;
                       if (tc.function?.name) toolCalls[idx].function.name = tc.function.name;
                       if (tc.function?.arguments) toolCalls[idx].function.arguments += tc.function.arguments;
+                      // Capturar thought_signature (viene en extra_content.google)
+                      const sig = tc.extra_content?.google?.thought_signature;
+                      if (sig) toolCalls[idx].thought_signature = sig;
                     }
                   }
                 } catch (e) {
@@ -266,14 +273,23 @@ serve(async (req) => {
             controller.enqueue(encoder.encode(sseEvent("tools_start", { names: toolNames })));
 
             // Anadir el assistant message con tool_calls al historial
+            // CRITICO: incluir thought_signature en cada tool_call. Gemini lo
+            // exige para la siguiente iteracion del loop (si no, error 400:
+            // "Function call is missing a thought_signature").
             apiMessages.push({
               role: "assistant",
               content: iterText || null,
-              tool_calls: toolCalls.map(tc => ({
-                id: tc.id,
-                type: "function",
-                function: { name: tc.function.name, arguments: tc.function.arguments }
-              }))
+              tool_calls: toolCalls.map(tc => {
+                const tcMsg: any = {
+                  id: tc.id,
+                  type: "function",
+                  function: { name: tc.function.name, arguments: tc.function.arguments },
+                };
+                if (tc.thought_signature) {
+                  tcMsg.extra_content = { google: { thought_signature: tc.thought_signature } };
+                }
+                return tcMsg;
+              })
             });
 
             // Ejecutar cada tool y emitir su resultado al cliente
