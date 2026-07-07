@@ -243,7 +243,11 @@ serve(async (req) => {
             }
 
             // Si no hay tool_calls, terminamos el loop
-            if (toolCalls.length === 0 || finishReason !== "tool_calls") {
+            // NOTA: Gemini en streaming puede emitir finish_reason "stop" incluso
+            // cuando hay tool_calls acumulados (verificado empiricamente 2026-07-08).
+            // Por eso comprobamos toolCalls.length primero: si hay tools, las
+            // ejecutamos sin importar el finishReason.
+            if (toolCalls.length === 0) {
               if (!assistantMessageSaved && (fullText || iterThinking)) {
                 await saveAssistantMessage(
                   supabaseAdmin,
