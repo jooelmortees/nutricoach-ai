@@ -359,12 +359,35 @@ struct PendingAttachment: Identifiable, Equatable {
 
 /// Attachment ya enviado (con URL firmada para mostrar en el chat).
 struct MessageAttachment: Identifiable, Equatable, Codable {
-    let id = UUID()
-    let type: String  // "image" | "video"
+    let id: UUID
+    let type: String
     let url: String
 
+    init(id: UUID = UUID(), type: String, url: String) {
+        self.id = id
+        self.type = type
+        self.url = url
+    }
+
     enum CodingKeys: String, CodingKey {
-        case id, type, url
+        case type, url
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = UUID()
+        self.type = try container.decode(String.self, forKey: .type)
+        self.url = try container.decode(String.self, forKey: .url)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(type, forKey: .type)
+        try container.encode(url, forKey: .url)
+    }
+
+    static func == (lhs: MessageAttachment, rhs: MessageAttachment) -> Bool {
+        lhs.id == rhs.id
     }
 }
 
