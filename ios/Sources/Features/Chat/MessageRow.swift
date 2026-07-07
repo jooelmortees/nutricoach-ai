@@ -1,8 +1,8 @@
 // ============================================================
-// MessageRow - celda individual del chat (rediseno completo)
-// Patrones: avatar + esquinas asimetricas (scarf/AICat),
-// tools colapsables con color por tipo (Sidekick/scarf),
-// thinking colapsable con preview (hanlin-ai)
+// MessageRow - celda individual del chat (estilo Claude)
+// Assistant: texto plano pegado a la izquierda, sin bocadillo
+// User: caja con fondo pegada a la derecha
+// Sin avatares, sin logo
 // ============================================================
 
 import SwiftUI
@@ -15,30 +15,17 @@ struct MessageRow: View {
     var onRegenerate: (() -> Void)? = nil
 
     var body: some View {
-        HStack(alignment: .top, spacing: 6) {
-            if message.role == .assistant {
-                AssistantAvatar()
-                    .padding(.top, 4)
-            } else {
-                Spacer(minLength: 48)
-            }
-
-            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
-                contentStack
-            }
-            .frame(maxWidth: 270, alignment: message.role == .user ? .trailing : .leading)
-
-            if message.role == .assistant {
-                Spacer(minLength: 48)
-            }
+        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
+            contentStack
         }
-        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
     private var contentStack: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
-            // Thinking colapsable (estilo hanlin-ai)
+            // Thinking colapsable
             if let thinking = message.thinking, !thinking.isEmpty, message.role == .assistant {
                 ThinkingSection(text: thinking, isStreaming: message.isStreaming)
             }
@@ -48,25 +35,78 @@ struct MessageRow: View {
                 AttachmentsGrid(attachments: attachments, onImageTap: onImageTap)
             }
 
-            // Tools en ejecucion (estilo Sidekick/scarf)
+            // Tools en ejecucion
             if let toolStatus = message.toolStatus, !toolStatus.isEmpty {
                 ToolStepsSection(tools: toolStatus)
             }
 
-            // Burbuja de texto con markdown + deteccion de macros
+            // Contenido del mensaje
             if !message.content.isEmpty || !message.isStreaming {
-                TextBubble(
-                    text: message.content,
-                    role: message.role,
-                    isStreaming: message.isStreaming,
-                    onSaveMeal: onSaveMeal
-                )
+                messageContent
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var messageContent: some View {
+        if message.role == .user {
+            // USER: caja con fondo, pegada a la derecha
+            VStack(alignment: .leading, spacing: 6) {
+                if let extracted = PendingMeal.extract(from: message.content), let macros = extracted.macros {
+                    if !extracted.cleaned.isEmpty {
+                        MarkdownView(text: extracted.cleaned)
+                    }
+                    MacrosCard(meal: macros, onSave: { editedMeal in
+                        await onSaveMeal(editedMeal)
+                    })
+                } else {
+                    MarkdownView(text: message.content)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+            .foregroundStyle(.primary)
+            .frame(maxWidth: 280, alignment: .trailing)
+            .contextMenu {
+                Button {
+                    UIPasteboard.general.string = message.content
+                } label: {
+                    Label("Copiar", systemImage: "doc.on.doc")
+                }
+            }
+        } else {
+            // ASSISTANT: texto plano, sin bocadillo, pegado a la izquierda
+            VStack(alignment: .leading, spacing: 6) {
+                if message.content.isEmpty && message.isStreaming {
+                    StreamingDots()
+                } else if let extracted = PendingMeal.extract(from: message.content), let macros = extracted.macros {
+                    if !extracted.cleaned.isEmpty {
+                        MarkdownView(text: extracted.cleaned)
+                    }
+                    MacrosCard(meal: macros, onSave: { editedMeal in
+                        await onSaveMeal(editedMeal)
+                    })
+                } else {
+                    MarkdownView(text: message.content)
+                }
+                if message.isStreaming && !message.content.isEmpty {
+                    StreamingDots()
+                        .padding(.top, 2)
+                }
+            }
+            .contextMenu {
+                Button {
+                    UIPasteboard.general.string = message.content
+                } label: {
+                    Label("Copiar", systemImage: "doc.on.doc")
+                }
             }
         }
     }
 }
 
-// MARK: - Assistant avatar
+// MARK: - Assistant avatar (no usado pero mantenido por compat)
 
 struct AssistantAvatar: View {
     var body: some View {
@@ -81,7 +121,7 @@ struct AssistantAvatar: View {
     }
 }
 
-// MARK: - Thinking section (estilo hanlin-ai: colapsable + preview)
+// MARK: - Thinking section
 
 private struct ThinkingSection: View {
     let text: String
@@ -138,7 +178,7 @@ private struct ThinkingSection: View {
     }
 }
 
-// MARK: - Tool steps section (estilo Sidekick/scarf: pills con color por tipo)
+// MARK: - Tool steps section
 
 private struct ToolStepsSection: View {
     let tools: [ToolStatus]
@@ -257,7 +297,7 @@ struct ToolStatus: Identifiable, Equatable {
     }
 }
 
-// MARK: - Macros detection (PendingMeal)
+// MARK: - Macros detection
 
 struct PendingMeal: Codable, Equatable {
     var description: String
@@ -408,130 +448,7 @@ struct AttachmentsGrid: View {
     }
 }
 
-// MARK: - Text bubble (efecto bocadillo con pico)
-
-private struct TextBubble: View {
-    let text: String
-    let role: ChatMessage.Role
-    let isStreaming: Bool
-    let onSaveMeal: (PendingMeal) async -> Bool
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            if role == .assistant {
-                // Pico del bocadillo apuntando al avatar (izquierda)
-                BubbleTail(role: .assistant)
-                    .foregroundStyle(bubbleColor)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                if text.isEmpty && isStreaming {
-                    StreamingDots()
-                } else if let extracted = PendingMeal.extract(from: text), let macros = extracted.macros {
-                    if !extracted.cleaned.isEmpty {
-                        MarkdownView(text: extracted.cleaned)
-                    }
-                    MacrosCard(meal: macros, onSave: { editedMeal in
-                        await onSaveMeal(editedMeal)
-                    })
-                } else {
-                    MarkdownView(text: text)
-                    if isStreaming {
-                        StreamingDots()
-                            .padding(.top, 2)
-                    }
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(bubbleColor, in: bubbleShape)
-            .foregroundStyle(textColor)
-            .contextMenu {
-                Button {
-                    UIPasteboard.general.string = text
-                } label: {
-                    Label("Copiar", systemImage: "doc.on.doc")
-                }
-            }
-
-            if role == .user {
-                Spacer(minLength: 0)
-                // Pico del bocadillo apuntando a la derecha
-                BubbleTail(role: .user)
-                    .foregroundStyle(bubbleColor)
-            }
-        }
-    }
-
-    private var bubbleShape: UnevenRoundedRectangle {
-        if role == .user {
-            return UnevenRoundedRectangle(
-                topLeadingRadius: 18,
-                bottomLeadingRadius: 18,
-                bottomTrailingRadius: 18,
-                topTrailingRadius: 4
-            )
-        } else {
-            return UnevenRoundedRectangle(
-                topLeadingRadius: 4,
-                bottomLeadingRadius: 18,
-                bottomTrailingRadius: 18,
-                topTrailingRadius: 18
-            )
-        }
-    }
-
-    private var bubbleColor: Color {
-        role == .user ? Color.green.opacity(0.9) : Color(.secondarySystemBackground)
-    }
-
-    private var textColor: Color {
-        role == .user ? .white : .primary
-    }
-}
-
-// MARK: - Pico del bocadillo
-
-private struct BubbleTail: View {
-    let role: ChatMessage.Role
-
-    var body: some View {
-        Triangle()
-            .fill(Color.clear)
-            .frame(width: 8, height: 10)
-            .overlay(
-                Triangle()
-                    .fill(tailColor)
-                    .frame(width: 8, height: 10)
-            )
-            .padding(.top, 10)
-    }
-
-    private var tailColor: Color {
-        role == .user ? Color.green.opacity(0.9) : Color(.secondarySystemBackground)
-    }
-}
-
-private struct Triangle: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        if rect.width > rect.height {
-            // Pico hacia la derecha (user)
-            path.move(to: CGPoint(x: 0, y: rect.minY))
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-            path.addLine(to: CGPoint(x: 0, y: rect.maxY))
-        } else {
-            // Pico hacia la izquierda (assistant)
-            path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
-            path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        }
-        path.closeSubpath()
-        return path
-    }
-}
-
-// MARK: - Streaming dots (3 puntos animados suaves)
+// MARK: - Streaming dots (onda suave)
 
 private struct StreamingDots: View {
     @State private var phase: CGFloat = 0

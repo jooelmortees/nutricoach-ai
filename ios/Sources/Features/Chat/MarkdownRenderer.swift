@@ -16,6 +16,7 @@ enum MarkdownBlock: Identifiable {
     case codeBlock(language: String?, code: String)
     case blockquote(text: String)
     case divider
+    case table(headers: [String], rows: [[String]])
 
     var id: String {
         switch self {
@@ -25,7 +26,10 @@ enum MarkdownBlock: Identifiable {
         case .codeBlock(let lang, let c): return "code-\(lang ?? "")-\(c.prefix(20))"
         case .blockquote(let t): return "bq-\(t)"
         case .divider: return "hr"
+        case .table(let h, let r): return "table-\(h.joined())-\(r.count)"
         }
+    }
+}
     }
 }
 
@@ -122,6 +126,25 @@ enum MarkdownRenderer {
                 continue
             }
 
+            // Tabla: linea con | separadores
+            if trimmed.contains("|") && trimmed.hasPrefix("|") {
+                var tableLines: [String] = []
+                while i < lines.count {
+                    let l = lines[i].trimmingCharacters(in: .whitespaces)
+                    if l.contains("|") && l.hasPrefix("|") {
+                        tableLines.append(l)
+                        i += 1
+                    } else {
+                        break
+                    }
+                }
+                if let table = parseTable(tableLines) {
+                    blocks.append(table)
+                    orderedCounter = 0
+                    continue
+                }
+            }
+
             // Parrafo: agrupar lineas consecutivas no vacias
             var paraLines: [String] = [trimmed]
             i += 1
@@ -198,6 +221,37 @@ enum MarkdownRenderer {
         return nil
     }
 
+    // MARK: - Tablas
+
+    private static func parseTable(_ lines: [String]) -> MarkdownBlock? {
+        guard lines.count >= 2 else { return nil }
+        // La segunda linea debe ser el separador: |---|---|
+        let separatorLine = lines[1]
+        let separatorCells = splitTableRow(separatorLine)
+        let isSeparator = separatorCells.allSatisfy { cell in
+            let trimmed = cell.trimmingCharacters(in: .whitespaces)
+            return trimmed.allSatisfy { $0 == "-" || $0 == ":" } && trimmed.contains("-")
+        }
+        guard isSeparator else { return nil }
+
+        let headers = splitTableRow(lines[0])
+        var rows: [[String]] = []
+        for line in lines.dropFirst(2) {
+            rows.append(splitTableRow(line))
+        }
+        return .table(headers: headers, rows: rows)
+    }
+
+    private static func splitTableRow(_ line: String) -> [String] {
+        let cleaned = line.trimmingCharacters(in: .whitespaces)
+        // Quitar | del inicio y final
+        var inner = cleaned
+        if inner.hasPrefix("|") { inner = String(inner.dropFirst()) }
+        if inner.hasSuffix("|") { inner = String(inner.dropLast()) }
+        return inner.split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
     // MARK: - Render a AttributedString
 
     /// Convierte texto inline con **bold**, *italic*, `code`, ~~strike~~ y
@@ -221,22 +275,11 @@ enum MarkdownRenderer {
 
 struct MarkdownView: View {
     let text: String
-    var isStreaming: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if isStreaming {
-                // Durante streaming: texto plano para maxima fluidez.
-                // Re-parsear markdown en cada token es carisimo y congela la UI.
-                // Al terminar el stream se renderiza con markdown completo.
-                Text(text)
-                    .font(.body)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                ForEach(MarkdownRenderer.parse(text)) { block in
-                    renderBlock(block)
-                }
+            ForEach(MarkdownRenderer.parse(text)) { block in
+                renderBlock(block)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -309,7 +352,52 @@ struct MarkdownView: View {
         case .divider:
             Divider()
                 .padding(.vertical, 4)
+
+        case .table(let headers, let rows):
+            tableView(headers: headers, rows: rows)
         }
+    }
+
+    @ViewBuilder
+    private func tableView(headers: [String], rows: [[String]]) -> some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack(spacing: 0) {
+                ForEach(Array(headers.enumerated()), id: \.offset) { _, header in
+                    Text(MarkdownRenderer.renderInline(header, baseFont: .subheadline.weight(.semibold)))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                }
+            }
+            .background(Color(.tertiarySystemBackground))
+            Divider()
+            // Rows
+            ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
+                HStack(spacing: 0) {
+                    ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                        Text(MarkdownRenderer.renderInline(cell))
+                            .font(.subheadline)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                    }
+                }
+                .background(rowIdx % 2 == 0 ? Color.clear : Color(.tertiarySystemBackground).opacity(0.3))
+                if rowIdx < rows.count - 1 {
+                    Divider()
+                }
+            }
+        }
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 0.5)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder

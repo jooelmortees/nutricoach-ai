@@ -6,15 +6,20 @@
 
 import SwiftUI
 import PhotosUI
+import AVFoundation
 
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var viewModel = ChatViewModel()
+    @StateObject private var audioRecorder = AudioRecorder()
     @State private var inputText: String = ""
     @State private var selectedItems: [PhotosPickerItem] = []
     @FocusState private var inputFocused: Bool
     @State private var fullscreenImageURL: String?
     @State private var showClearConfirm: Bool = false
+    @State private var webSearchEnabled: Bool = false
+    @State private var isRecordingAudio: Bool = false
+    @State private var audioTimer: Timer?
 
     var body: some View {
         NavigationStack {
@@ -107,15 +112,9 @@ struct ChatView: View {
                     }
                     // Indicador de thinking al final
                     if viewModel.isAgentThinking && (viewModel.messages.last?.content.isEmpty ?? true) {
-                        HStack(spacing: 6) {
-                            AssistantAvatar()
-                                .padding(.top, 2)
-                            ThinkingIndicator()
-                                .padding(10)
-                                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
-                        }
-                        .padding(.vertical, 4)
-                        .transition(.scale(scale: 0.9).combined(with: .opacity))
+                        ThinkingIndicator()
+                            .padding(10)
+                            .transition(.scale(scale: 0.9).combined(with: .opacity))
                     }
                 }
                 .padding(.horizontal, 16)
@@ -150,24 +149,88 @@ struct ChatView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
             }
+            if isRecordingAudio {
+                HStack(spacing: 8) {
+                    Image(systemName: "waveform")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                    Text("Grabando...")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                    Spacer()
+                    Button {
+                        cancelAudioRecording()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(.red.opacity(0.08))
+            }
+            if let audioData = audioRecorder.audioData, !isRecordingAudio {
+                HStack(spacing: 8) {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                    Text("Audio listo")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        audioRecorder.audioData = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(.green.opacity(0.08))
+            }
             Divider()
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                // Boton busqueda web (toggle)
+                Button {
+                    webSearchEnabled.toggle()
+                } label: {
+                    Image(systemName: webSearchEnabled ? "globe" : "globe")
+                        .font(.title3)
+                        .foregroundStyle(webSearchEnabled ? .blue : .secondary)
+                        .symbolEffect(.bounce, value: webSearchEnabled)
+                }
+
                 PhotosPicker(
                     selection: $selectedItems,
                     maxSelectionCount: nil,
                     matching: .images
                 ) {
-                    Image(systemName: viewModel.pendingAttachments.isEmpty
-                          ? "photo.on.rectangle"
-                          : "photo.fill")
+                    Image(systemName: "photo.on.rectangle")
                         .font(.title3)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(.secondary)
                 }
                 .onChange(of: selectedItems) { _, newItems in
                     Task {
                         await viewModel.handlePickedImages(newItems)
                         selectedItems = []
                     }
+                }
+                .disabled(viewModel.isAgentThinking)
+
+                // Boton micro
+                Button {
+                    if isRecordingAudio {
+                        stopAudioRecording()
+                    } else {
+                        startAudioRecording()
+                    }
+                } label: {
+                    Image(systemName: isRecordingAudio ? "stop.circle.fill" : "mic")
+                        .font(.title3)
+                        .foregroundStyle(isRecordingAudio ? .red : .secondary)
                 }
                 .disabled(viewModel.isAgentThinking)
 
@@ -186,7 +249,7 @@ struct ChatView: View {
                 .onSubmit {
                     Task { await send() }
                 }
-                .disabled(viewModel.isAgentThinking)
+                .disabled(viewModel.isAgentThinking || isRecordingAudio)
 
                 Button {
                     Task { await send() }
@@ -194,7 +257,7 @@ struct ChatView: View {
                     Image(systemName: viewModel.isAgentThinking
                           ? "stop.circle.fill"
                           : "arrow.up.circle.fill")
-                        .font(.system(size: 32))
+                        .font(.system(size: 30))
                         .foregroundStyle(viewModel.isAgentThinking ? .red : .green)
                         .symbolEffect(.bounce, value: viewModel.isAgentThinking)
                 }
@@ -206,6 +269,8 @@ struct ChatView: View {
         .background(.bar)
         .animation(.easeInOut(duration: 0.2), value: viewModel.pendingAttachments.count)
         .animation(.easeInOut(duration: 0.2), value: viewModel.isAgentThinking)
+        .animation(.easeInOut(duration: 0.2), value: isRecordingAudio)
+        .animation(.easeInOut(duration: 0.2), value: audioRecorder.audioData != nil)
     }
 
     private var inputPlaceholder: String {
@@ -215,14 +280,35 @@ struct ChatView: View {
     private var canSend: Bool {
         let hasText = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasAttachments = !viewModel.pendingAttachments.isEmpty
-        return (hasText || hasAttachments) && !viewModel.isAgentThinking
+        let hasAudio = audioRecorder.audioData != nil
+        return (hasText || hasAttachments || hasAudio) && !viewModel.isAgentThinking && !isRecordingAudio
     }
 
     private func send() async {
         let text = inputText
         inputText = ""
         inputFocused = false
-        await viewModel.send(text: text)
+        let audioData = audioRecorder.audioData
+        let useWebSearch = webSearchEnabled
+        await viewModel.send(text: text, audioData: audioData, webSearch: useWebSearch)
+        audioRecorder.audioData = nil
+    }
+
+    // MARK: - Audio recording
+
+    private func startAudioRecording() {
+        audioRecorder.startRecording()
+        isRecordingAudio = true
+    }
+
+    private func stopAudioRecording() {
+        audioRecorder.stopRecording()
+        isRecordingAudio = false
+    }
+
+    private func cancelAudioRecording() {
+        audioRecorder.cancelRecording()
+        isRecordingAudio = false
     }
 
     private func isLastAssistant(index: Int) -> Bool {

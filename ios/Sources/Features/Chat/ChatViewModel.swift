@@ -18,14 +18,12 @@ final class ChatViewModel: ObservableObject {
     @Published var pendingAttachments: [PendingAttachment] = []
 
     private let agent = AgentService.shared
-    private var textThrottler: TextThrottler?
 
     func loadOrCreateConversation() async {
         do {
             if currentConversationId == nil {
                 let id = try await agent.loadOrCreateLatestConversation()
                 currentConversationId = id
-                AppLogger.info("Conversacion cargada: \(id)")
             }
             if let convId = currentConversationId {
                 let history = try await agent.loadHistory(conversationId: convId)
@@ -39,11 +37,9 @@ final class ChatViewModel: ObservableObject {
                         isStreaming: false
                     )
                 }
-                AppLogger.info("Historial cargado: \(history.count) mensajes")
             }
         } catch {
-            AppLogger.error("Error cargando conversacion: \(error)")
-            errorMessage = "No se pudo cargar el chat: \(error.localizedDescription)"
+            errorMessage = "No se pudo cargar historial: \(error.localizedDescription)"
         }
     }
 
@@ -102,26 +98,27 @@ final class ChatViewModel: ObservableObject {
         pendingAttachments = []
     }
 
-    /// Envía un mensaje al agente. Sube TODAS las imagenes pendientes a Storage,
-    /// las adjunta al mensaje, y limpia el estado de preview.
-    func send(text: String) async {
+    /// Envia un mensaje al agente. Sube imagenes, adjunta audio si hay,
+    /// y limpia el estado de preview.
+    func send(text: String, audioData: Data? = nil, webSearch: Bool = false) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasText = !trimmed.isEmpty
         let hasAttachments = !pendingAttachments.isEmpty
-        guard hasText || hasAttachments else { return }
+        let hasAudio = audioData != nil
+        guard hasText || hasAttachments || hasAudio else { return }
         guard let convId = currentConversationId else {
-            errorMessage = "No hay conversación activa."
+            errorMessage = "No hay conversacion activa."
             return
         }
 
-        // 1. Subir TODAS las imagenes pendientes y construir URLs firmadas
+        // 1. Subir imagenes pendientes
         var displayAttachments: [MessageAttachment] = []
         var agentAttachments: [AgentAttachment] = []
         var displayText = trimmed
-        if hasAttachments && !hasText {
-            displayText = "¿Qué macros tiene esta comida?"
+        if hasAttachments && !hasText && !hasAudio {
+            displayText = "Que macros tiene esta comida?"
         }
-        // Snapshot para evitar race conditions si el user modifica el array
+        if hasAudio && !hasText { displayText = "" }
         let toUpload = pendingAttachments
         for attachment in toUpload {
             do {
@@ -134,24 +131,30 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
-        // 2. Limpiar adjuntos pendientes (la UI ya no muestra preview)
+        // 2. Adjuntar audio como base64
+        if let audio = audioData {
+            let base64 = audio.base64EncodedString()
+            agentAttachments.append(AgentAttachment(type: "audio", data: base64, mime_type: "audio/m4a"))
+        }
+
+        // 3. Limpiar adjuntos pendientes
         pendingAttachments = []
 
-        // 3. Añadir mensaje del usuario a la UI (con attachments para mostrar)
+        // 4. Añadir mensaje del usuario a la UI
         let userMsg = ChatMessage(
             role: .user,
-            content: displayText,
+            content: displayText.isEmpty ? "[Audio]" : displayText,
             attachments: displayAttachments
         )
         messages.append(userMsg)
         isAgentThinking = true
         errorMessage = nil
 
-        // 4. Crear placeholder del asistente
+        // 5. Crear placeholder del asistente
         let assistantMsg = ChatMessage(role: .assistant, content: "", isStreaming: true)
         messages.append(assistantMsg)
 
-        // 5. Enviar al agente
+        // 6. Enviar al agente
         await agent.sendMessage(
             conversationId: convId,
             message: displayText,
@@ -162,11 +165,6 @@ final class ChatViewModel: ObservableObject {
                 self.handle(event: event)
             }
         }
-
-        // 6. Borrar imagenes de Storage tras enviar (1h de expiracion del signed URL
-        //    deberia ser suficiente para que el cliente las muestre).
-        //    NOTA: NO borramos hasta que el user salga del chat, para que
-        //    los thumbnails sigan visibles todo el rato.
     }
 
     private func handle(event: AgentEvent) {
@@ -176,15 +174,9 @@ final class ChatViewModel: ObservableObject {
                 messages[idx].thinking = (messages[idx].thinking ?? "") + text
             }
         case .textDelta(let text):
-            // Throttle: acumular tokens y volcar a UI cada ~80ms
-            // para evitar que SwiftUI congele en mensajes largos.
-            if textThrottler == nil {
-                textThrottler = TextThrottler(interval: 0.03) { [weak self] chunk in
-                    guard let self, let idx = self.messages.indices.last else { return }
-                    self.messages[idx].content += chunk
-                }
+            if let idx = messages.indices.last {
+                messages[idx].content += text
             }
-            textThrottler?.append(text)
         case .blockStart, .blockStop:
             break
         case .toolsStart(let names):
@@ -213,9 +205,6 @@ final class ChatViewModel: ObservableObject {
                 }
             }
         case .done:
-            // Flush final: volcar cualquier texto pendiente del throttler
-            textThrottler?.flushNow()
-            textThrottler = nil
             if let idx = messages.indices.last {
                 messages[idx].isStreaming = false
                 // Limpiar el estado de tools al terminar
@@ -229,8 +218,6 @@ final class ChatViewModel: ObservableObject {
                 content: "🍽️ \(description)\n\(summary)\n\nRegistrada en tu pestaña Macros."
             ))
         case .error(let msg):
-            textThrottler?.flushNow()
-            textThrottler = nil
             errorMessage = msg
             isAgentThinking = false
             if let idx = messages.indices.last, messages[idx].role == .assistant && messages[idx].isStreaming {
