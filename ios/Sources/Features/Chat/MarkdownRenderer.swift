@@ -30,8 +30,6 @@ enum MarkdownBlock: Identifiable {
         }
     }
 }
-    }
-}
 
 enum MarkdownRenderer {
     /// Parsea markdown en una lista de bloques.
