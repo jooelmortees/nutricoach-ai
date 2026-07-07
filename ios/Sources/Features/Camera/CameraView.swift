@@ -116,7 +116,7 @@ final class CameraViewModel: ObservableObject {
         Task {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             isAnalyzing = false
-            analysis = "Análisis pendiente. En fase 2 conectamos con M3 Vision."
+            analysis = "Análisis pendiente. En fase 2 conectamos con Gemini Vision."
         }
     }
 }

@@ -245,11 +245,11 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    /// Guarda una comida (parseada del JSON de M3) en la tabla `meals` del usuario.
-    /// Usado por el boton "Guardar en mi dia" que aparece cuando M3 devuelve
+    /// Guarda una comida (parseada del JSON de Gemini) en la tabla `meals` del usuario.
+    /// Usado por el boton "Guardar en mi dia" que aparece cuando Gemini devuelve
     /// macros en formato JSON.
     ///
-    /// Mapeo entre `PendingMeal` (lo que viene del JSON de M3) y la tabla `meals`:
+    /// Mapeo entre `PendingMeal` (lo que viene del JSON de Gemini) y la tabla `meals`:
     /// - `description`  -> `name`  (la tabla no tiene `description`)
     /// - `kcal`         -> `total_kcal`
     /// - `protein_g`    -> `total_protein_g`

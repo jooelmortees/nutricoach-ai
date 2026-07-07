@@ -85,7 +85,7 @@ struct OnboardingView: View {
             Text("Bienvenido a NutriCoach")
                 .font(.largeTitle).bold()
                 .multilineTextAlignment(.center)
-            Text("Tu dietista personal con IA potenciado por M3. Vamos a conocerte en 4 pasos rápidos.")
+            Text("Tu dietista personal con IA potenciado por Gemini. Vamos a conocerte en 4 pasos rápidos.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

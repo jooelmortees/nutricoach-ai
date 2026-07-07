@@ -1,6 +1,6 @@
 # NutriCoach AI
 
-App iOS nativa con un agente IA dietista-nutricionista potenciado por **MiniMax-M3**, conectado a Apple HealthKit, con memoria persistente, visión nativa para análisis de comida, y MCPs especializados en nutrición, fitness y salud.
+App iOS nativa con un agente IA dietista-nutricionista potenciado por **Gemini 3.5 Flash**, conectado a Apple HealthKit, con memoria persistente, visión nativa para análisis de comida, y MCPs especializados en nutrición, fitness y salud.
 
 > Estado: **Fase 1 — Configurando Supabase**. DB lista, falta Edge Functions + secrets.
 
@@ -14,7 +14,7 @@ App iOS nativa con un agente IA dietista-nutricionista potenciado por **MiniMax-
   - Realtime en 4 tablas (messages, meals, health_metrics, scheduled_nudges)
 - ✅ **Edge Functions**: código escrito (chat-proxy, hk-sync, mcp-router + 7 MCPs)
 - ⏳ **Pendiente**: desplegar Edge Functions, configurar secrets, primer build iOS
-- ⏳ **Pendiente de ti**: API key MiniMax, Apple Developer certs, service_role key
+- ⏳ **Pendiente de ti**: API key Gemini, Apple Developer certs, service_role key
 
 ## Arquitectura en 30 segundos
 
@@ -23,7 +23,7 @@ iPhone (sideloadly)
    ↓ Supabase Swift SDK
 Supabase (Postgres + pgvector + Auth + Storage + Edge Functions)
    ↓ HTTPS (proxy seguro)
-MiniMax-M3 (cerebro IA con visión, tool use, thinking)
+Gemini 3.5 Flash (cerebro IA con visión, tool use, thinking)
    ↓ MCP
 8 MCPs (web_search oficial + 7 custom: nutrition, fitness, wearable, memory, recipes, fasting, user-data)
 ```
@@ -81,7 +81,7 @@ Ve a Settings > Secrets and variables > Actions del repo y crea:
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `MINIMAX_API_KEY`
+- `GEMINI_API_KEY`
 - `APPLE_TEAM_ID`
 - `APPLE_KEY_ID`
 - `APPLE_ISSUER_ID`
@@ -121,8 +121,8 @@ El proyecto Xcode se genera automáticamente en GitHub Actions. Tú solo descarg
 | Storage | Supabase Storage |
 | Realtime | Supabase Realtime v2 |
 | Lógica | Supabase Edge Functions (Deno) |
-| IA | MiniMax-M3 (Anthropic SDK compatible) |
-| MCP | `minimax-coding-plan-mcp` (oficial) + 7 custom |
+| IA | Gemini 3.5 Flash (OpenAI-compatible endpoint) |
+| MCP | `web_search` (Google Search via Gemini) + 7 custom |
 | Build | GitHub Actions `macos-15-arm64` |
 | Distribución | sideloadly (Apple Developer Program) |
 

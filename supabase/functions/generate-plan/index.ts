@@ -1,6 +1,6 @@
 // ============================================================
 // generate-plan - Edge Function de Supabase
-// Genera un plan de dieta semanal o diario con M3 y lo guarda en meal_plans.
+// Genera un plan de dieta semanal o diario con Gemini y lo guarda en meal_plans.
 // ============================================================
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
@@ -9,9 +9,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const MINIMAX_API_KEY = Deno.env.get("MINIMAX_API_KEY")!;
-const MINIMAX_BASE_URL = Deno.env.get("MINIMAX_BASE_URL") ?? "https://api.minimax.io/v1";
-const MINIMAX_MODEL = Deno.env.get("MINIMAX_MODEL") ?? "MiniMax-M3";
+const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
+const GEMINI_BASE_URL = Deno.env.get("GEMINI_BASE_URL") ?? "https://generativelanguage.googleapis.com/v1beta/openai";
+const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -64,15 +64,15 @@ serve(async (req) => {
       ? "Genera un plan de comida para toda la semana (7 días, lunes a domingo). Cada día con desayuno, almuerzo, cena y un snack. Adapta las comidas a mi perfil y preferencias. Devuelve SOLO el JSON, sin texto adicional."
       : "Genera un plan de comida para un solo día (hoy). Con desayuno, almuerzo, cena y un snack. Adapta las comidas a mi perfil y preferencias. Devuelve SOLO el JSON, sin texto adicional.";
 
-    // Llamar a M3 sin streaming (queremos el JSON completo)
-    const m3Response = await fetch(`${MINIMAX_BASE_URL}/chat/completions`, {
+    // Llamar a Gemini sin streaming (queremos el JSON completo)
+    const geminiResponse = await fetch(`${GEMINI_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${MINIMAX_API_KEY}`,
+        "Authorization": `Bearer ${GEMINI_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: MINIMAX_MODEL,
+        model: GEMINI_MODEL,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
@@ -80,26 +80,27 @@ serve(async (req) => {
         stream: false,
         max_completion_tokens: 8192,
         temperature: 0.7,
-        // CRITICO: thinking desactivado para que response_format produzca JSON puro.
-        // Con thinking:adaptive (default), M3 emite bloques de razonamiento dentro
-        // de content y corrompe el JSON. Verificado empiricamente 2026-06-29.
+        // CRITICO: reasoning_effort minimal para que response_format produzca
+        // JSON puro. Con reasoning_effort medium/high, Gemini emite bloques
+        // de razonamiento dentro de content y corrompe el JSON.
+        // Verificado empiricamente 2026-07-07.
         response_format: { type: "json_object" },
-        thinking: { type: "disabled" },
+        reasoning_effort: "minimal",
       }),
     });
 
-    if (!m3Response.ok) {
-      const errText = await m3Response.text();
-      return jsonError(500, `M3 error ${m3Response.status}: ${errText}`);
+    if (!geminiResponse.ok) {
+      const errText = await geminiResponse.text();
+      return jsonError(500, `Gemini error ${geminiResponse.status}: ${errText}`);
     }
 
-    const m3Data = await m3Response.json();
-    const content = m3Data.choices?.[0]?.message?.content ?? "";
+    const geminiData = await geminiResponse.json();
+    const content = geminiData.choices?.[0]?.message?.content ?? "";
 
     // Parsear el JSON del plan
     let planData: any;
     try {
-      // M3 con response_format json_object deberia devolver JSON puro,
+      // Gemini con response_format json_object deberia devolver JSON puro,
       // pero por si acaso extraemos el JSON del texto.
       const jsonStr = extractJson(content) ?? content;
       planData = JSON.parse(jsonStr);

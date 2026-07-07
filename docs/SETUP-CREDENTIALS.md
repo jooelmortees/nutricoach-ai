@@ -9,7 +9,7 @@
 | `SUPABASE_URL` | `.env` local + GitHub Secret `SUPABASE_URL` |
 | `SUPABASE_ANON_KEY` | `.env` local + GitHub Secret `SUPABASE_ANON_KEY` + Info.plist de iOS (build) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Solo GitHub Secret `SUPABASE_SERVICE_ROLE_KEY` (NUNCA en cliente) |
-| `MINIMAX_API_KEY` | Solo GitHub Secret `MINIMAX_API_KEY` (NUNCA en cliente) |
+| `GEMINI_API_KEY` | Solo GitHub Secret `GEMINI_API_KEY` (NUNCA en cliente) |
 | `APPLE_TEAM_ID` | GitHub Secret + variable |
 | `APPLE_KEY_ID` | GitHub Secret |
 | `APPLE_ISSUER_ID` | GitHub Secret |
@@ -38,7 +38,7 @@ Pulsa "New repository secret" para cada uno:
 | `SUPABASE_URL` | `https://abcdefgh.supabase.co` |
 | `SUPABASE_ANON_KEY` | `eyJ...` |
 | `SUPABASE_SERVICE_ROLE_KEY` | `eyJ...` (MUY sensible) |
-| `MINIMAX_API_KEY` | `eyJ...` (MUY sensible) |
+| `GEMINI_API_KEY` | `AIza...` (sensible) |
 | `APPLE_TEAM_ID` | `ABCDE12345` (lo ves en developer.apple.com) |
 | `APPLE_KEY_ID` | `1234567890` (en App Store Connect > Users > Keys) |
 | `APPLE_ISSUER_ID` | `uuid-de-issuer` (en App Store Connect > Users > Keys) |
@@ -93,7 +93,7 @@ Las Edge Functions leen variables de entorno con `Deno.env.get()`. Se configuran
 supabase functions serve chat-proxy --env-file .env.local
 
 # Remoto
-supabase secrets set MINIMAX_API_KEY=eyJ... --project-ref YOUR_REF
+supabase secrets set GEMINI_API_KEY=AIza... --project-ref YOUR_REF
 ```
 
 También las configuramos automáticamente desde GitHub Secrets en el workflow `deploy-functions.yml`.

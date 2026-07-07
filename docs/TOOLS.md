@@ -16,7 +16,7 @@
 | `search_memories` | memory | 4 |
 | `search_food` | nutrition | 3 |
 | `get_food_details` | nutrition | 3 |
-| `analyze_meal_photo` | nutrition | 2 (usa M3 vision directo en chat-proxy) |
+| `analyze_meal_photo` | nutrition | 2 (usa Gemini vision directo en chat-proxy) |
 | `analyze_meal_video` | nutrition | 5 |
 | `analyze_meal_text` | nutrition | 1 |
 | `log_meal` | nutrition | 2 |
@@ -40,7 +40,7 @@
 | `generate_shopping_list` | plans | 3 |
 | `swap_meal` | plans | 3 |
 | `schedule_nudge` | nudges | 5 |
-| `web_search` | MiniMax MCP oficial | 1 ✅ |
+| `web_search` | Gemini grounding (Google Search) | 1 ✅ |
 | `list_recipes` | recipes | 5 |
 | `get_recipe` | recipes | 5 |
 | `create_recipe` | recipes | 5 |
@@ -82,8 +82,8 @@ El loop del agente (en `chat-proxy`) es:
 
 ```ts
 let response = await anthropic.messages.create({
-  model: "MiniMax-M3",
-  messages, tools, thinking: { type: "adaptive" }
+  model: "gemini-3.5-flash",
+  messages, tools, reasoning_effort: "medium"
 })
 
 while (response.stop_reason === "tool_use") {
@@ -96,4 +96,4 @@ while (response.stop_reason === "tool_use") {
 }
 ```
 
-Importante: **preservar TODOS los content blocks** (thinking + text + tool_use) al añadir al historial. Si se pierde el thinking, M3 pierde la cadena de razonamiento.
+Importante: **preservar TODOS los content blocks** (thinking + text + tool_use) al añadir al historial. Si se pierde el thinking, Gemini pierde la cadena de razonamiento.

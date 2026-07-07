@@ -1,6 +1,6 @@
 # System Prompt del Agente — NutriCoach
 
-> Este archivo se carga en la Edge Function `chat-proxy` y se envía como `system` en cada llamada a MiniMax-M3.
+> Este archivo se carga en la Edge Function `chat-proxy` y se envía como `system` en cada llamada a Gemini 3.5 Flash.
 > Iteraré contigo en cada sprint para refinarlo.
 
 ## Versión actual (fase 0)
@@ -75,7 +75,7 @@ const systemPrompt = `
 `;
 ```
 
-El bloque fijo se cachea automáticamente por M3 con prompt caching.
+El bloque fijo se beneficia del implicit caching de Gemini (auto desde 4096 tokens de prefijo).
 
 ## Pendiente para fase 1
 

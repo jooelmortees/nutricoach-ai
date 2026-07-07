@@ -17,21 +17,20 @@ Supabase (managed)
 ├─ Storage (fotos/vídeos privados con RLS)
 ├─ Realtime v2 (WebSocket para chat streaming)
 └─ Edge Functions (Deno)
-   ├─ chat-proxy   → orquesta M3 con 25+ tools
+   ├─ chat-proxy   → orquesta Gemini 3.5 Flash con 25+ tools
    ├─ hk-sync      → recibe HealthKit del iPhone
    └─ mcp-router   → 7 MCPs custom (nutrition, fitness, wearable,
                      memory, recipes, fasting, user-data)
 
-        │ HTTPS (ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic)
-        ▼
+         │ HTTPS (https://generativelanguage.googleapis.com/v1beta/openai)
+         ▼
 
-MiniMax-M3 (tu suscripción)
+Gemini 3.5 Flash (tu API key de Google AI Studio)
 ├─ Visión nativa (JPEG, PNG, GIF, WEBP ≤ 10MB)
 ├─ Vídeo nativo (MP4, AVI, MOV, MKV ≤ 50MB; 512MB vía Files API)
-├─ Interleaved Thinking (adaptive)
+├─ Thinking (reasoning_effort: minimal/low/medium/high)
 ├─ Tool use / Function calling
 ├─ Streaming con thinking + text por separado
-├─ Prompt caching automático
 └─ Context window: 1.000.000 tokens
 ```
 
@@ -48,12 +47,12 @@ MiniMax-M3 (tu suscripción)
 - Auth + RLS + Storage + Realtime en un solo panel
 - Free tier generoso para empezar
 
-### Por qué MiniMax-M3
+### Por qué Gemini 3.5 Flash
 - Cerebro agentic con visión + vídeo nativos (no necesito CLIP, no necesito GPT-4V)
-- Interleaved Thinking: reflexiona entre tool calls
-- Compatible con Anthropic SDK (fácil integración)
+- Thinking con reasoning_effort configurable (minimal/low/medium/high)
+- Compatible con endpoint OpenAI (fácil integración, formato estándar)
 - 1M tokens de context (cargo historial completo)
-- Prompt caching automático (ahorra costes en system prompt)
+- API key gratis en Google AI Studio (free tier generoso)
 
 ### Por qué wger + USDA FDC
 - Open source, sin coste por API call, sin riesgo de cierre
@@ -63,7 +62,7 @@ MiniMax-M3 (tu suscripción)
 
 ### Por qué no hay TTS/STT/imagen
 - Coste/beneficio no compensa para esta app
-- M3 ya ve fotos y vídeos del usuario (no necesita generar)
+- Gemini ya ve fotos y vídeos del usuario (no necesita generar)
 - Texto es lo más útil + más rápido + más barato
 
 ## Diagrama de datos
@@ -101,14 +100,14 @@ Todas las tablas tienen RLS: cada usuario solo ve/edita sus datos.
    - Valida JWT del usuario
    - Carga perfil + hechos activos + últimos 20 mensajes
    - Construye system prompt (perfil + hechos + instrucciones)
-   - Llama a `anthropic.messages.create()` con `model=MiniMax-M3`, tools, thinking=adaptive, stream=true
-3. **MiniMax-M3**:
-   - Genera thinking (interno)
+   - Llama a `POST /v1beta/openai/chat/completions` con `model=gemini-3.5-flash`, tools, reasoning_effort=medium, stream=true
+3. **Gemini 3.5 Flash**:
+   - Genera thinking (interno, envuelto en tags `<thought>` en delta.content)
    - Decide si llamar a tools
    - Si sí: para, llama a `POST /functions/v1/mcp-router` con `tool` y `arguments`
    - **mcp-router** despacha al MCP correcto (nutrition, fitness, etc.)
    - El MCP lee/escribe en Supabase, devuelve resultado
-   - M3 integra resultado y sigue razonando
+   - Gemini integra resultado y sigue razonando
    - Cuando termina, emite `text` final
 4. **chat-proxy** streamea `thinking_delta` y `text_delta` al iOS vía Server-Sent Events
 5. **iOS** renderiza en tiempo real
@@ -118,7 +117,7 @@ Todas las tablas tienen RLS: cada usuario solo ve/edita sus datos.
 
 | Capa | Dónde | Cuándo se carga | Coste |
 |---|---|---|---|
-| **Core** | System prompt | Cada request | Alto, pero con prompt caching de M3 → bajo |
+| **Core** | System prompt | Cada request | Medio (implicit caching desde 4096 tokens de prefijo) |
 | **Recall** | Últimos 20 mensajes en `messages` | Cada request | Bajo |
 | **Archival (RAG)** | `memory_embeddings` (pgvector) | Cuando el agente lo pide | Bajo (HNSW index) |
 | **Structured facts** | `user_facts` (texto plano) | Cuando el agente lo pide | Bajo |

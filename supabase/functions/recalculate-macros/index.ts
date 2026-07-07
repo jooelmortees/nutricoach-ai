@@ -1,6 +1,6 @@
 // ============================================================
 // recalculate-macros - Edge Function
-// Recibe ingredientes editados por el usuario y pide a MiniMax-M3
+// Recibe ingredientes editados por el usuario y pide a Gemini 3.5 Flash
 // que calcule los macros (kcal, protein, carbs, fat) y devuelva
 // un JSON estructurado.
 // ============================================================
@@ -10,9 +10,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const MINIMAX_API_KEY = Deno.env.get("MINIMAX_API_KEY")!;
-const MINIMAX_BASE_URL = Deno.env.get("MINIMAX_BASE_URL") ?? "https://api.minimax.io/v1";
-const MINIMAX_MODEL = Deno.env.get("MINIMAX_MODEL") ?? "MiniMax-M3";
+const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
+const GEMINI_BASE_URL = Deno.env.get("GEMINI_BASE_URL") ?? "https://generativelanguage.googleapis.com/v1beta/openai";
+const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -59,7 +59,7 @@ serve(async (req) => {
       return jsonError(400, "ingredients array required");
     }
 
-    // Construir prompt para MiniMax
+    // Construir prompt para Gemini
     const ingredientsText = body.ingredients
       .map(i => `- ${i.name}: ${i.quantity} ${i.unit}`)
       .join("\n");
@@ -80,32 +80,33 @@ Reglas:
 
     const userPrompt = `Comida: ${body.name}\nIngredientes:\n${ingredientsText}\n\nCalcula los macros totales y responde SOLO con el JSON.`;
 
-    // Llamar a MiniMax
-    const response = await fetch(`${MINIMAX_BASE_URL}/chat/completions`, {
+    // Llamar a Gemini
+    const response = await fetch(`${GEMINI_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${MINIMAX_API_KEY}`,
+        "Authorization": `Bearer ${GEMINI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: MINIMAX_MODEL,
+        model: GEMINI_MODEL,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
         temperature: 0.3,
         max_completion_tokens: 500,
-        // CRITICO: thinking desactivado para que response_format produzca JSON puro.
-        // Con thinking:adaptive (default), M3 emite bloques de razonamiento dentro
-        // de content y corrompe el JSON. Verificado empiricamente 2026-06-29.
+        // CRITICO: reasoning_effort minimal para que response_format produzca
+        // JSON puro. Con reasoning_effort medium/high, Gemini emite bloques
+        // de razonamiento dentro de content y corrompe el JSON.
+        // Verificado empiricamente 2026-07-07.
         response_format: { type: "json_object" },
-        thinking: { type: "disabled" },
+        reasoning_effort: "minimal",
       }),
     });
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error("MiniMax error:", response.status, errText);
+      console.error("Gemini error:", response.status, errText);
       return jsonError(500, `Error del modelo: ${response.status}`);
     }
 

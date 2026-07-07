@@ -50,7 +50,7 @@ if (-not (Test-Path "$ProjectRoot\.env")) {
         Write-Host ""
         Write-Host "⚠️  IMPORTANTE: rellena las claves en .env antes de continuar" -ForegroundColor Yellow
         Write-Host "   - SUPABASE_SERVICE_ROLE_KEY (dashboard Supabase)" -ForegroundColor Yellow
-        Write-Host "   - MINIMAX_API_KEY (platform.minimax.io)" -ForegroundColor Yellow
+        Write-Host "   - GEMINI_API_KEY (aistudio.google.com/apikey)" -ForegroundColor Yellow
         Write-Host "   - APPLE_* (developer.apple.com)" -ForegroundColor Yellow
         Write-Host ""
         $continue = Read-Host "Pulsa Enter para continuar o Ctrl+C para salir"
@@ -68,7 +68,7 @@ Write-Host "[3/5] Validando secrets críticos..." -NoNewline
 $envContent = Get-Content "$ProjectRoot\.env" -Raw
 $missing = @()
 if ($envContent -match "SUPABASE_SERVICE_ROLE_KEY=\s*$|<") { $missing += "SUPABASE_SERVICE_ROLE_KEY" }
-if ($envContent -match "MINIMAX_API_KEY=\s*$|<") { $missing += "MINIMAX_API_KEY" }
+if ($envContent -match "GEMINI_API_KEY=\s*$|<") { $missing += "GEMINI_API_KEY" }
 if ($envContent -match "APPLE_TEAM_ID=\s*$|<") { $missing += "APPLE_TEAM_ID" }
 if ($missing.Count -gt 0) {
     Write-Host " INCOMPLETO" -ForegroundColor Yellow
@@ -124,10 +124,10 @@ if (-not $SkipSupabase) {
 
             Write-Host ""
             Write-Host "Configurando secrets de Edge Functions..." -ForegroundColor Cyan
-            $minimaxKey = (Get-Content "$ProjectRoot\.env" | Select-String "MINIMAX_API_KEY=(.+)" | ForEach-Object { $_.Matches[0].Groups[1].Value })
+            $geminiKey = (Get-Content "$ProjectRoot\.env" | Select-String "GEMINI_API_KEY=(.+)" | ForEach-Object { $_.Matches[0].Groups[1].Value })
             $usdaKey = (Get-Content "$ProjectRoot\.env" | Select-String "USDA_FDC_API_KEY=(.+)" | ForEach-Object { $_.Matches[0].Groups[1].Value })
-            if ($minimaxKey -and $minimaxKey -notmatch "^<") {
-                supabase secrets set MINIMAX_API_KEY=$minimaxKey --project-ref $projectRef
+            if ($geminiKey -and $geminiKey -notmatch "^<") {
+                supabase secrets set GEMINI_API_KEY=$geminiKey --project-ref $projectRef
             }
             if ($usdaKey -and $usdaKey -ne "<copiar>") {
                 supabase secrets set USDA_FDC_API_KEY=$usdaKey --project-ref $projectRef

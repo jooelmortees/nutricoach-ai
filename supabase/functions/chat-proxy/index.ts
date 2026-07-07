@@ -1,6 +1,6 @@
 // ============================================================
 // chat-proxy - Edge Function de Supabase
-// Proxy seguro al agente MiniMax-M3 con loop agentico (tool use).
+// Proxy seguro al agente Gemini 3.5 Flash con loop agentico (tool use).
 // Streaming SSE hacia el cliente iOS.
 // ============================================================
 
@@ -10,9 +10,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const MINIMAX_API_KEY = Deno.env.get("MINIMAX_API_KEY")!;
-const MINIMAX_BASE_URL = Deno.env.get("MINIMAX_BASE_URL") ?? "https://api.minimax.io/v1";
-const MINIMAX_MODEL = Deno.env.get("MINIMAX_MODEL") ?? "MiniMax-M3";
+const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
+const GEMINI_BASE_URL = Deno.env.get("GEMINI_BASE_URL") ?? "https://generativelanguage.googleapis.com/v1beta/openai";
+const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -98,7 +98,7 @@ serve(async (req) => {
     // 9. Tools (function calling formato OpenAI)
     const tools = getAgentTools();
 
-    // 10. Loop agentico: M3 puede llamar tools, ejecutamos, volvemos a llamar
+    // 10. Loop agentico: Gemini puede llamar tools, ejecutamos, volvemos a llamar
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
@@ -109,37 +109,38 @@ serve(async (req) => {
 
         try {
           for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration++) {
-            // Hacer request a M3 con streaming
-            const upstreamResp = await fetch(`${MINIMAX_BASE_URL}/chat/completions`, {
+            // Hacer request a Gemini con streaming
+            const upstreamResp = await fetch(`${GEMINI_BASE_URL}/chat/completions`, {
               method: "POST",
               headers: {
-                "Authorization": `Bearer ${MINIMAX_API_KEY}`,
+                "Authorization": `Bearer ${GEMINI_API_KEY}`,
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({
-                model: MINIMAX_MODEL,
+                model: GEMINI_MODEL,
                 messages: apiMessages,
                 tools,
                 stream: true,
                 max_completion_tokens: 16384,
-                thinking: { type: "adaptive" },
-                // IMPORTANTE: NO usamos reasoning_split. Emite TODO en delta.content
-                // mezclando thinking con content. El parser en backend separa
-                // los bloques <think>...</think> del content.
+                reasoning_effort: "medium",
+                // IMPORTANTE: Gemini 3.5 Flash emite el thinking en delta.content
+                // envuelto en tags <thought>...</thought> con un marcador
+                // extra_content.google.thought = true en cada chunk de thinking.
+                // El parser en backend separa los bloques <thought> del content.
               }),
             });
 
             if (!upstreamResp.ok) {
               const errText = await upstreamResp.text();
-              controller.enqueue(encoder.encode(sseEvent("error", { message: `M3 error ${upstreamResp.status}: ${errText}` })));
+              controller.enqueue(encoder.encode(sseEvent("error", { message: `Gemini error ${upstreamResp.status}: ${errText}` })));
               return;
             }
 
-            // Parsear el stream de M3
+            // Parsear el stream de Gemini
             const reader = upstreamResp.body!.getReader();
             const decoder = new TextDecoder();
             let buffer = "";
-            // Buffer persistente para el parser de <think>...</think>
+            // Buffer persistente para el parser de <thought>...</thought>
             // (necesario porque los tags pueden llegar partidos en varios chunks)
             let rawContent = "";
             let emittedTextLen = 0;
@@ -168,23 +169,26 @@ serve(async (req) => {
                   finishReason = choice.finish_reason || finishReason;
                   const delta = choice.delta;
 
-                  // 1. reasoning_content (algunos servers lo usan)
+                  // 1. reasoning_content (algunos servers lo usan; Gemini no,
+                  //    pero lo dejamos por compatibilidad futura)
                   if (delta?.reasoning_content) {
                     iterThinking += delta.reasoning_content;
                     controller.enqueue(encoder.encode(sseEvent("thinking", { text: delta.reasoning_content })));
                   }
 
-                  // 2. content: parsear streaming de <think>...</think>
-                  //    M3 con thinking:adaptive emite TODO en delta.content
-                  //    mezclando los tags <think>...</think> con la respuesta.
-                  //    Necesitamos separar en streaming porque el cliente espera
-                  //    eventos 'thinking' y 'text' por separado.
+                  // 2. content: parsear streaming de <thought>...</thought>
+                  //    Gemini 3.5 Flash con reasoning_effort emite el thinking
+                  //    en delta.content envuelto en tags <thought>...</thought>
+                  //    con un marcador extra_content.google.thought = true en
+                  //    cada chunk de thinking. Necesitamos separar en streaming
+                  //    porque el cliente espera eventos thinking y text por
+                  //    separado.
                   if (delta?.content) {
                     rawContent += delta.content;
-                    // Aplicar regex para extraer bloque <think> cerrado
-                    const thinkMatch = rawContent.match(/<think>([\s\S]*?)<\/think>/);
+                    // Aplicar regex para extraer bloque <thought> cerrado
+                    const thinkMatch = rawContent.match(/<thought>([\s\S]*?)<\/thought>/);
                     if (thinkMatch) {
-                      // Hay un bloque <think> completo
+                      // Hay un bloque <thought> completo
                       const thinkStart = thinkMatch.index!;
                       const thinkEnd = thinkStart + thinkMatch[0].length;
                       // thinking text = lo que esta entre tags (sin doble emision)
@@ -194,7 +198,7 @@ serve(async (req) => {
                         iterThinking = newThinking;
                         controller.enqueue(encoder.encode(sseEvent("thinking", { text: thinkingDelta })));
                       }
-                      // text = lo que va despues de </think>
+                      // text = lo que va despues de </thought>
                       const textAfter = rawContent.substring(thinkEnd);
                       if (textAfter.length > emittedTextLen) {
                         const textDelta = textAfter.substring(emittedTextLen);
@@ -203,8 +207,8 @@ serve(async (req) => {
                         fullText = textAfter;
                         controller.enqueue(encoder.encode(sseEvent("text", { text: textDelta })));
                       }
-                    } else if (!rawContent.includes("<think>")) {
-                      // No hay <think> y no se ha visto: emitir todo como text
+                    } else if (!rawContent.includes("<thought>")) {
+                      // No hay <thought> y no se ha visto: emitir todo como text
                       if (rawContent.length > emittedTextLen) {
                         const textDelta = rawContent.substring(emittedTextLen);
                         emittedTextLen = rawContent.length;
@@ -213,7 +217,7 @@ serve(async (req) => {
                         controller.enqueue(encoder.encode(sseEvent("text", { text: textDelta })));
                       }
                     }
-                    // Si <think> esta abierto (sin cierre), esperar al siguiente chunk
+                    // Si <thought> esta abierto (sin cierre), esperar al siguiente chunk
                   }
 
                   // 3. tool_calls (function calling)
@@ -252,7 +256,7 @@ serve(async (req) => {
               break;
             }
 
-            // Hay tool_calls: ejecutar y volver a llamar a M3
+            // Hay tool_calls: ejecutar y volver a llamar a Gemini
             // Emitir evento tools_start con nombres legibles de las tools
             const toolNames = toolCalls.map(t => t.function.name);
             controller.enqueue(encoder.encode(sseEvent("tools_start", { names: toolNames })));
@@ -430,7 +434,7 @@ async function saveMeal(supabase: any, userId: string, analysis: any) {
 // ============================================================
 
 interface ToolResult {
-  content: string;       // Texto que se envia a M3 como tool_result
+  content: string;       // Texto que se envia a Gemini como tool_result
   summary: string;       // Resumen para emitir al cliente via SSE
 }
 
@@ -612,19 +616,20 @@ async function executeTool(
           return { content: "Error: type debe ser 'weekly' o 'daily'", summary: "Error en generate_meal_plan" };
         }
 
-        // Generar el plan llamando a M3 con prompt de plan
+        // Generar el plan llamando a Gemini con prompt de plan
         const planPrompt = buildPlanPrompt(profile, facts, type, notes);
-        const m3Resp = await fetch(`${MINIMAX_BASE_URL}/chat/completions`, {
+        const geminiResp = await fetch(`${GEMINI_BASE_URL}/chat/completions`, {
           method: "POST",
           headers: {
-            "Authorization": `Bearer ${MINIMAX_API_KEY}`,
+            "Authorization": `Bearer ${GEMINI_API_KEY}`,
             "Content-Type": "application/json",
           },
-          // CRITICO: thinking desactivado para que response_format produzca JSON puro.
-          // Con thinking:adaptive (default), M3 emite bloques de razonamiento dentro
-          // de content y corrompe el JSON. Verificado empiricamente 2026-06-29.
+          // CRITICO: reasoning_effort minimal para que response_format produzca
+          // JSON puro. Con reasoning_effort medium/high, Gemini emite bloques
+          // de razonamiento dentro de content y corrompe el JSON.
+          // Verificado empiricamente 2026-07-07.
           body: JSON.stringify({
-            model: MINIMAX_MODEL,
+            model: GEMINI_MODEL,
             messages: [
               { role: "system", content: planPrompt.system },
               { role: "user", content: planPrompt.user },
@@ -633,17 +638,17 @@ async function executeTool(
             max_completion_tokens: 8192,
             temperature: 0.7,
             response_format: { type: "json_object" },
-            thinking: { type: "disabled" },
+            reasoning_effort: "minimal",
           }),
         });
 
-        if (!m3Resp.ok) {
-          const errText = await m3Resp.text();
-          return { content: `Error generando plan: M3 error ${m3Resp.status}`, summary: "Error generando plan" };
+        if (!geminiResp.ok) {
+          const errText = await geminiResp.text();
+          return { content: `Error generando plan: Gemini error ${geminiResp.status}`, summary: "Error generando plan" };
         }
 
-        const m3Data = await m3Resp.json();
-        const content = m3Data.choices?.[0]?.message?.content ?? "";
+        const geminiData = await geminiResp.json();
+        const content = geminiData.choices?.[0]?.message?.content ?? "";
 
         let planData: any;
         try {

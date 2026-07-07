@@ -67,16 +67,16 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-          MINIMAX_BASE_URL: ${{ vars.MINIMAX_BASE_URL || 'https://api.minimax.io/v1' }}
-          MINIMAX_MODEL: ${{ vars.MINIMAX_MODEL || 'MiniMax-M3' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_BASE_URL: ${{ vars.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.5-flash' }}
           USDA_FDC_API_KEY: ${{ secrets.USDA_FDC_API_KEY }}
         run: |
           echo "Configurando secrets de Edge Functions..."
           supabase secrets set \
-            MINIMAX_API_KEY="$MINIMAX_API_KEY" \
-            MINIMAX_BASE_URL="$MINIMAX_BASE_URL" \
-            MINIMAX_MODEL="$MINIMAX_MODEL" \
+            GEMINI_API_KEY="$GEMINI_API_KEY" \
+            GEMINI_BASE_URL="$GEMINI_BASE_URL" \
+            GEMINI_MODEL="$GEMINI_MODEL" \
             USDA_FDC_API_KEY="$USDA_FDC_API_KEY" \
             --project-ref "$SUPABASE_PROJECT_REF"
 
