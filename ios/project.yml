@@ -66,8 +66,7 @@ targets:
         NSCameraUsageDescription: "Necesitamos la cámara para fotografiar tus comidas y que el agente las analice."
         NSPhotoLibraryUsageDescription: "Para que puedas elegir fotos de tus comidas desde la galería."
         NSPhotoLibraryAddUsageDescription: "Para guardar en tu galería las recetas e informes que generes."
-        NSMicrophoneUsageDescription: "Para grabar mensajes de voz y enviarlos al agente de NutriCoach."
-        NSSpeechRecognitionUsageDescription: "Para transcribir tus audios a texto y enviarlos al agente."
+        NSMicrophoneUsageDescription: "Reservado para futuras funciones de audio."
         NSLocationWhenInUseUsageDescription: "Opcional: para registrar dónde comes y detectar restaurantes frecuentes."
         NSUserNotificationUsageDescription: "Para enviarte recordatorios de comidas, hidratación y entrenamiento."
         ITSAppUsesNonExemptEncryption: false
@@ -95,6 +94,7 @@ targets:
       - package: KeychainAccess
       - sdk: HealthKit.framework
       - sdk: AVFoundation.framework
+      - sdk: Photos.framework
       - sdk: UserNotifications.framework
       - sdk: AuthenticationServices.framework
 

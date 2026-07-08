@@ -7,11 +7,13 @@
 import SwiftUI
 import PhotosUI
 import AVFoundation
+import Photos
 
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var viewModel = ChatViewModel()
     @StateObject private var audioRecorder = AudioRecorder()
+    @StateObject private var photoLibrary = PhotoLibraryService.shared
     @State private var inputText: String = ""
     @State private var selectedItems: [PhotosPickerItem] = []
     @FocusState private var inputFocused: Bool
@@ -19,13 +21,22 @@ struct ChatView: View {
     @State private var showClearConfirm: Bool = false
     @State private var webSearchEnabled: Bool = false
     @State private var isRecordingAudio: Bool = false
-    @State private var audioTimer: Timer?
+    @State private var showPlusMenu: Bool = false
+    @State private var showCamera: Bool = false
+    @State private var showFullGallery: Bool = false
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                messagesList
-                inputBar
+            ZStack {
+                VStack(spacing: 0) {
+                    messagesList
+                    inputBar
+                }
+
+                // Overlay del bottom sheet del botón "+"
+                if showPlusMenu {
+                    plusMenuOverlay
+                }
             }
             .navigationTitle("NutriCoach")
             .navigationBarTitleDisplayMode(.inline)
@@ -69,6 +80,27 @@ struct ChatView: View {
                     fullscreenImageURL = nil
                 }
             }
+            .sheet(isPresented: $showCamera) {
+                CameraPicker(
+                    onImage: { image in
+                        addCameraImage(image)
+                    },
+                    onCancel: {}
+                )
+                .ignoresSafeArea()
+            }
+            .photosPicker(
+                isPresented: $showFullGallery,
+                selection: $selectedItems,
+                maxSelectionCount: nil,
+                matching: .images
+            )
+            .onChange(of: selectedItems) { _, newItems in
+                Task {
+                    await viewModel.handlePickedImages(newItems)
+                    selectedItems = []
+                }
+            }
             .confirmationDialog("Limpiar el chat?", isPresented: $showClearConfirm) {
                 Button("Limpiar", role: .destructive) {
                     viewModel.clearConversation()
@@ -78,6 +110,55 @@ struct ChatView: View {
                 Text("Se borraran los mensajes de esta conversacion en pantalla. La conversacion seguira existiendo en la base de datos.")
             }
         }
+    }
+
+    // MARK: - Overlay del bottom sheet del botón "+"
+
+    private var plusMenuOverlay: some View {
+        ZStack {
+            // Fondo semitransparente que captura taps para cerrar
+            Color.black.opacity(0.45)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        showPlusMenu = false
+                    }
+                }
+            VStack {
+                Spacer()
+                PlusMenuSheet(
+                    webSearchEnabled: $webSearchEnabled,
+                    photoLibrary: photoLibrary,
+                    onOpenCamera: {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            showPlusMenu = false
+                        }
+                        showCamera = true
+                    },
+                    onOpenFullGallery: {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            showPlusMenu = false
+                        }
+                        showFullGallery = true
+                    },
+                    onPickRecent: { asset in
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            showPlusMenu = false
+                        }
+                        Task { await addRecentPhoto(asset) }
+                    },
+                    onClose: {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            showPlusMenu = false
+                        }
+                    }
+                )
+                .padding(.bottom, 0)
+            }
+            .ignoresSafeArea(.container, edges: .top)
+        }
+        .transition(.opacity)
+        .zIndex(10)
     }
 
     // MARK: - Messages list
@@ -137,7 +218,7 @@ struct ChatView: View {
         }
     }
 
-    // MARK: - Input bar
+    // MARK: - Input bar (tema carbón estilo Claude)
 
     private var inputBar: some View {
         VStack(spacing: 0) {
@@ -170,7 +251,7 @@ struct ChatView: View {
                 .padding(.vertical, 6)
                 .background(.red.opacity(0.08))
             }
-            if let audioData = audioRecorder.audioData, !isRecordingAudio {
+            if audioRecorder.audioData != nil && !isRecordingAudio {
                 HStack(spacing: 8) {
                     Image(systemName: "speaker.wave.2.fill")
                         .font(.caption)
@@ -191,82 +272,34 @@ struct ChatView: View {
                 .padding(.vertical, 6)
                 .background(.green.opacity(0.08))
             }
-            Divider()
-            HStack(spacing: 8) {
-                // Boton busqueda web (toggle)
-                Button {
-                    webSearchEnabled.toggle()
-                } label: {
-                    Image(systemName: webSearchEnabled ? "globe" : "globe")
-                        .font(.title3)
-                        .foregroundStyle(webSearchEnabled ? .blue : .secondary)
-                        .symbolEffect(.bounce, value: webSearchEnabled)
-                }
 
-                PhotosPicker(
-                    selection: $selectedItems,
-                    maxSelectionCount: nil,
-                    matching: .images
-                ) {
-                    Image(systemName: "photo.on.rectangle")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                }
-                .onChange(of: selectedItems) { _, newItems in
-                    Task {
-                        await viewModel.handlePickedImages(newItems)
-                        selectedItems = []
+            // Nueva barra de entrada estilo Claude
+            ChatInputBar(
+                text: $inputText,
+                placeholder: inputPlaceholder,
+                isAgentThinking: viewModel.isAgentThinking,
+                isRecordingAudio: isRecordingAudio,
+                onPlusTap: {
+                    inputFocused = false
+                    Task { await photoLibrary.requestAccessAndLoadRecent(limit: 12) }
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        showPlusMenu = true
                     }
-                }
-                .disabled(viewModel.isAgentThinking)
-
-                // Boton micro
-                Button {
+                },
+                onMicTap: {
                     if isRecordingAudio {
                         stopAudioRecording()
                     } else {
                         startAudioRecording()
                     }
-                } label: {
-                    Image(systemName: isRecordingAudio ? "stop.circle.fill" : "mic")
-                        .font(.title3)
-                        .foregroundStyle(isRecordingAudio ? .red : .secondary)
-                }
-                .disabled(viewModel.isAgentThinking)
-
-                TextField(
-                    inputPlaceholder,
-                    text: $inputText,
-                    axis: .vertical
-                )
-                .focused($inputFocused)
-                .lineLimit(1...5)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 20))
-                .submitLabel(.send)
-                .onSubmit {
+                },
+                onSend: {
                     Task { await send() }
-                }
-                .disabled(viewModel.isAgentThinking || isRecordingAudio)
-
-                Button {
-                    Task { await send() }
-                } label: {
-                    Image(systemName: viewModel.isAgentThinking
-                          ? "stop.circle.fill"
-                          : "arrow.up.circle.fill")
-                        .font(.system(size: 30))
-                        .foregroundStyle(viewModel.isAgentThinking ? .red : .green)
-                        .symbolEffect(.bounce, value: viewModel.isAgentThinking)
-                }
-                .disabled(!canSend && !viewModel.isAgentThinking)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+                },
+                isFocused: $inputFocused
+            )
         }
-        .background(.bar)
+        .background(Color(red: 0.10, green: 0.10, blue: 0.10))
         .animation(.easeInOut(duration: 0.2), value: viewModel.pendingAttachments.count)
         .animation(.easeInOut(duration: 0.2), value: viewModel.isAgentThinking)
         .animation(.easeInOut(duration: 0.2), value: isRecordingAudio)
@@ -274,14 +307,7 @@ struct ChatView: View {
     }
 
     private var inputPlaceholder: String {
-        viewModel.isAgentThinking ? "NutriCoach esta escribiendo..." : "Preguntale a tu dietista..."
-    }
-
-    private var canSend: Bool {
-        let hasText = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let hasAttachments = !viewModel.pendingAttachments.isEmpty
-        let hasAudio = audioRecorder.audioData != nil
-        return (hasText || hasAttachments || hasAudio) && !viewModel.isAgentThinking && !isRecordingAudio
+        "Chatear con Claude"
     }
 
     private func send() async {
@@ -292,6 +318,41 @@ struct ChatView: View {
         let useWebSearch = webSearchEnabled
         await viewModel.send(text: text, audioData: audioData, webSearch: useWebSearch)
         audioRecorder.audioData = nil
+    }
+
+    // MARK: - Imagen desde cámara
+
+    private func addCameraImage(_ image: UIImage) {
+        guard let data = image.jpegData(compressionQuality: 0.85) else { return }
+        let compressed = compressImageData(data, maxBytes: 2 * 1024 * 1024) ?? data
+        guard let preview = UIImage(data: compressed) else { return }
+        viewModel.pendingAttachments.append(
+            PendingAttachment(imageData: compressed, preview: preview)
+        )
+    }
+
+    // MARK: - Imagen desde galería reciente (PHAsset)
+
+    private func addRecentPhoto(_ asset: PHAsset) async {
+        guard let data = await photoLibrary.fetchFullImageData(for: asset) else { return }
+        let compressed = compressImageData(data, maxBytes: 2 * 1024 * 1024) ?? data
+        guard let preview = UIImage(data: compressed) else { return }
+        viewModel.pendingAttachments.append(
+            PendingAttachment(imageData: compressed, preview: preview)
+        )
+    }
+
+    private func compressImageData(_ data: Data, maxBytes: Int) -> Data? {
+        guard let image = UIImage(data: data) else { return nil }
+        var quality: CGFloat = 0.8
+        var result = data
+        while result.count > maxBytes && quality > 0.1 {
+            if let jpeg = image.jpegData(compressionQuality: quality) {
+                result = jpeg
+            }
+            quality -= 0.1
+        }
+        return result
     }
 
     // MARK: - Audio recording
