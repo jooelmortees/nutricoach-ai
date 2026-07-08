@@ -22,9 +22,11 @@ final class AudioRecorder: ObservableObject {
     @Published var isRecording = false
     @Published var audioData: Data?
     @Published var errorMessage: String?
-    /// Niveles de audio normalizados 0...1 para la waveform.
-    @Published var levels: [CGFloat] = []
-    /// Segundos transcurridos en la grabación actual.
+    /// Nivel suavizado 0...1 para la waveform (suavizado exponencial).
+    @Published var smoothedLevel: CGFloat = 0
+    /// Jitters por barra para movimiento natural de la waveform.
+    @Published var barJitters: [CGFloat] = Array(repeating: 0, count: 28)
+    /// Segundos transcurridos en la grabacion actual.
     @Published var elapsedSeconds: TimeInterval = 0
 
     static let maxDurationSeconds: TimeInterval = 180  // 3 minutos
@@ -37,7 +39,8 @@ final class AudioRecorder: ObservableObject {
     func startRecording() {
         errorMessage = nil
         audioData = nil
-        levels = []
+        smoothedLevel = 0
+        barJitters = Array(repeating: 0, count: 28)
         elapsedSeconds = 0
 
         let session = AVAudioSession.sharedInstance()
@@ -76,13 +79,24 @@ final class AudioRecorder: ObservableObject {
         }
     }
 
-    func stopRecording() {
+    /// Detiene la grabacion y lee el audio del disco.
+    /// CRITICO: es async porque AVAudioRecorder.stop() es asincrono:
+    /// el archivo WAV no esta garantizado de estar flushed en disco
+    /// inmediatamente despues de stop(). Si leemos con
+    /// Data(contentsOf:) justo despues, podemos obtener un archivo
+    /// incompleto o vacio -> Gemini no recibe audio valido.
+    /// Esperamos 100ms (suficiente para PCM lineal) antes de leer.
+    func stopRecording() async {
         recorder?.stop()
         isRecording = false
         stopMeteringTimers()
 
         guard let url = audioURL else { return }
+
         do {
+            // Pequeno retardo para asegurar que AVAudioRecorder ha
+            // hecho flush del archivo WAV a disco.
+            try await Task.sleep(nanoseconds: 100_000_000)  // 100ms
             audioData = try Data(contentsOf: url)
             try? FileManager.default.removeItem(at: url)
         } catch {
@@ -100,7 +114,8 @@ final class AudioRecorder: ObservableObject {
         }
         audioURL = nil
         audioData = nil
-        levels = []
+        smoothedLevel = 0
+        barJitters = Array(repeating: 0, count: 28)
         elapsedSeconds = 0
     }
 
@@ -118,17 +133,23 @@ final class AudioRecorder: ObservableObject {
     // MARK: - Timers
 
     private func startMeteringTimers() {
-        // Timer de muestreo de nivel (100ms) para la waveform.
+        // Timer de muestreo de nivel (50ms) para la waveform.
         // Modo .common para que no se pause durante scroll/touch.
-        let mTimer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+        let mTimer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, self.isRecording else { return }
-                let level = self.currentLevel()
-                self.levels.append(CGFloat(level))
-                // Mantener solo las últimas 40 muestras (4s de histórico visible)
-                if self.levels.count > 40 {
-                    self.levels.removeFirst(self.levels.count - 40)
+                let rawLevel = self.currentLevel()
+                // Suavizado exponencial: alpha alto = mas responsivo,
+                // alpha bajo = mas suave. 0.3 da un movimiento fluido
+                // estilo WhatsApp sin saltos bruscos.
+                let alpha: CGFloat = 0.3
+                self.smoothedLevel = (alpha * CGFloat(rawLevel)) + ((1 - alpha) * self.smoothedLevel)
+                // Generar jitters suaves por barra para movimiento natural
+                var newJitters: [CGFloat] = []
+                for _ in 0..<28 {
+                    newJitters.append(CGFloat.random(in: -0.12...0.12))
                 }
+                self.barJitters = newJitters
             }
         }
         RunLoop.main.add(mTimer, forMode: .common)
@@ -140,7 +161,7 @@ final class AudioRecorder: ObservableObject {
                 guard let self, self.isRecording else { return }
                 self.elapsedSeconds += 1
                 if self.elapsedSeconds >= Self.maxDurationSeconds {
-                    self.stopRecording()
+                    Task { await self.stopRecording() }
                 }
             }
         }

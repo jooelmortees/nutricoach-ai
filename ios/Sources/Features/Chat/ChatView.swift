@@ -253,7 +253,7 @@ struct ChatView: View {
                         audioRecorder.audioData = nil
                         startAudioRecording()
                     } else if isRecordingAudio {
-                        stopAudioRecording()
+                        Task { await stopAudioRecording() }
                     } else {
                         startAudioRecording()
                     }
@@ -262,10 +262,12 @@ struct ChatView: View {
                     cancelAudioRecording()
                 },
                 onSend: {
-                    if isRecordingAudio {
-                        stopAudioRecording()
+                    Task {
+                        if isRecordingAudio {
+                            await stopAudioRecording()
+                        }
+                        await send()
                     }
-                    Task { await send() }
                 },
                 isFocused: $inputFocused
             )
@@ -345,8 +347,8 @@ struct ChatView: View {
         isRecordingAudio = true
     }
 
-    private func stopAudioRecording() {
-        audioRecorder.stopRecording()
+    private func stopAudioRecording() async {
+        await audioRecorder.stopRecording()
         isRecordingAudio = false
     }
 

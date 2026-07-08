@@ -380,14 +380,26 @@ struct MessageAttachment: Identifiable, Equatable, Codable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case type, url
+        case type, url, data, mime_type
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.id = UUID()
-        self.type = try container.decode(String.self, forKey: .type)
-        self.url = try container.decode(String.self, forKey: .url)
+        // type y url son opcionales en BD: los attachments de audio
+        // guardan solo {data, mime_type} sin type ni url. Si falta
+        // type, inferimos por presencia de data/url.
+        let typeStr = try container.decodeIfPresent(String.self, forKey: .type)
+        let urlStr = try container.decodeIfPresent(String.self, forKey: .url)
+        let dataStr = try container.decodeIfPresent(String.self, forKey: .data)
+        if let t = typeStr {
+            self.type = t
+        } else if dataStr != nil {
+            self.type = "audio"
+        } else {
+            self.type = "image"
+        }
+        self.url = urlStr ?? ""
     }
 
     func encode(to encoder: Encoder) throws {
