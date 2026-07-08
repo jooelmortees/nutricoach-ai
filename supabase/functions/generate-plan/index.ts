@@ -257,7 +257,7 @@ REGLAS:
 7. Si hay presupuesto, ajusta las comidas a ese rango.
 
 FORMATO DE RESPUESTA (JSON estricto):
-Devuelve EXCLUSIVAMENTE un JSON válido con esta estructura exacta:
+Devuelve EXCLUSIVAMENTE un JSON válido con esta estructura exacta. Cada comida debe ser completa y detallada:
 
 {
   "type": "${planType}",
@@ -278,34 +278,53 @@ Devuelve EXCLUSIVAMENTE un JSON válido con esta estructura exacta:
           "protein_g": 22,
           "carbs_g": 38,
           "fat_g": 24,
-          "notes": "Notas de preparacion o ingredientes opcionales"
+          "fiber_g": 6,
+          "notes": "Resumen breve de la comida en 1 frase",
+          "ingredients": [
+            { "name": "Avena", "quantity": 50, "unit": "g" },
+            { "name": "Leche semidesnatada", "quantity": 200, "unit": "ml" },
+            { "name": "Platano", "quantity": 1, "unit": "ud" }
+          ],
+          "preparation": "Pasos detallados de preparacion (1-2-3...), claros y concisos, en español. Incluye cantidades, temperaturas y tiempos cuando aplique.",
+          "prep_time_min": 5,
+          "cook_time_min": 10,
+          "servings": 1,
+          "difficulty": "facil",
+          "tips": "Truco o variante opcional (sustituciones, ahorro tiempo, etc.)",
+          "allergens": ["leche", "gluten"]
         },
         {
           "type": "lunch",
           "name": "...",
-          "kcal": ...,
-          "protein_g": ...,
-          "carbs_g": ...,
-          "fat_g": ...,
-          "notes": "..."
+          "kcal": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ..., "fiber_g": ...,
+          "notes": "...",
+          "ingredients": [ ... ],
+          "preparation": "...",
+          "prep_time_min": ..., "cook_time_min": ..., "servings": ..., "difficulty": "...",
+          "tips": "...",
+          "allergens": [ ... ]
         },
         {
           "type": "dinner",
           "name": "...",
-          "kcal": ...,
-          "protein_g": ...,
-          "carbs_g": ...,
-          "fat_g": ...,
-          "notes": "..."
+          "kcal": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ..., "fiber_g": ...,
+          "notes": "...",
+          "ingredients": [ ... ],
+          "preparation": "...",
+          "prep_time_min": ..., "cook_time_min": ..., "servings": ..., "difficulty": "...",
+          "tips": "...",
+          "allergens": [ ... ]
         },
         {
           "type": "snack",
           "name": "...",
-          "kcal": ...,
-          "protein_g": ...,
-          "carbs_g": ...,
-          "fat_g": ...,
-          "notes": "..."
+          "kcal": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ..., "fiber_g": ...,
+          "notes": "...",
+          "ingredients": [ ... ],
+          "preparation": "...",
+          "prep_time_min": ..., "cook_time_min": ..., "servings": ..., "difficulty": "...",
+          "tips": "...",
+          "allergens": [ ... ]
         }
       ]
     }
@@ -317,8 +336,17 @@ Reglas del JSON:
 - target_kcal, target_protein_g, target_carbs_g, target_fat_g: los del perfil del usuario
 - days: array con ${planType === "weekly" ? "7 dias (lunes a domingo)" : "1 dia (hoy)"}
 - Cada dia tiene 4 comidas: breakfast, lunch, dinner, snack
-- kcal, protein_g, carbs_g, fat_g: numeros enteros
-- notes: breve descripcion de ingredientes o preparacion
+- kcal, protein_g, carbs_g, fat_g, fiber_g: numeros enteros
+- notes: resumen breve de la comida en 1 frase
+- ingredients: lista SIEMPRE con al menos 3 ingredientes. Cada uno con name, quantity (numero) y unit (g, ml, ud, cda, cdta, etc.)
+- preparation: pasos detallados en español, claros y accionables. Para snacks sin cocccion, indicar montaje o preparacion.
+- prep_time_min, cook_time_min: minutos enteros (0 si no hay coccion)
+- servings: raciones (normalmente 1)
+- difficulty: "facil", "media" o "alta"
+- tips: truco o variante opcional (puede ser string vacio)
+- allergens: lista de alérgenos presentes (leche, gluten, huevo, frutos secos, soja, pescado, marisco, etc.). Array vacio si ninguno.
+
+CRITICO: ingredients y preparation son OBLIGATORIOS en cada comida. No los omitas nunca.
 
 NO escribas texto fuera del JSON.`;
 }

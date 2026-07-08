@@ -121,6 +121,61 @@ final class PlansViewModel: ObservableObject {
         }
     }
 
+    /// Registra una comida del plan en la tabla `meals` del dia actual.
+    /// Usa source='ai_suggestion' (valor valido del enum meal_source_t).
+    /// Devuelve true si se guardo correctamente.
+    func logMealFromPlan(_ meal: PlanMeal) async -> Bool {
+        struct InsertPayload: Encodable {
+            let user_id: String
+            let name: String
+            let meal_type: String
+            let total_kcal: Double?
+            let total_protein_g: Double?
+            let total_carbs_g: Double?
+            let total_fat_g: Double?
+            let total_fiber_g: Double?
+            let source: String
+            let notes: String?
+        }
+
+        do {
+            let userId = try await SupabaseService.shared.client.auth.session.user.id.uuidString
+
+            // Notas estructuradas: ingredientes + preparacion abreviada
+            var notesParts: [String] = ["source=plan"]
+            if let ings = meal.ingredients, !ings.isEmpty {
+                let ingsStr = ings.map { "\($0.name):\($0.quantity ?? 0)\($0.unit ?? "")" }.joined(separator: ", ")
+                notesParts.append("ingredients=\(ingsStr)")
+            }
+            if let prep = meal.preparation, !prep.isEmpty {
+                notesParts.append("prep=\(prep.prefix(200))")
+            }
+            let notes = notesParts.joined(separator: " ")
+
+            let payload = InsertPayload(
+                user_id: userId,
+                name: meal.name,
+                meal_type: meal.type.rawValue,
+                total_kcal: meal.kcal,
+                total_protein_g: meal.proteinG,
+                total_carbs_g: meal.carbsG,
+                total_fat_g: meal.fatG,
+                total_fiber_g: meal.fiberG,
+                source: "ai_suggestion",
+                notes: notes
+            )
+
+            try await SupabaseService.shared.client
+                .from("meals")
+                .insert(payload)
+                .execute()
+            return true
+        } catch {
+            errorMessage = "Error registrando comida: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     // MARK: - Privados
 
     private func fetchPlans() async throws {

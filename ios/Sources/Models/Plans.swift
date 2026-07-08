@@ -71,6 +71,10 @@ struct PlanDay: Codable, Identifiable, Equatable {
 }
 
 /// Una comida del plan.
+/// Los campos extendidos (ingredients, preparation, prepTimeMinutes, etc.)
+/// son opcionales para mantener compatibilidad con planes antiguos que solo
+/// tienen name/kcal/macros/notes. La Edge Function generate-plan siempre los
+/// rellena a partir de la version extendida del prompt.
 struct PlanMeal: Codable, Identifiable, Equatable {
     var id: String { "\(type)-\(name)" }
     var type: MealType
@@ -80,12 +84,84 @@ struct PlanMeal: Codable, Identifiable, Equatable {
     var carbsG: Double?
     var fatG: Double?
     var notes: String?
+    // Campos extendidos (opcionales para planes antiguos)
+    var fiberG: Double?
+    var ingredients: [PlanIngredient]?
+    var preparation: String?
+    var prepTimeMinutes: Int?
+    var cookTimeMinutes: Int?
+    var servings: Int?
+    var difficulty: PlanMealDifficulty?
+    var tips: String?
+    var allergens: [String]?
 
     enum CodingKeys: String, CodingKey {
         case type, name, kcal, notes
         case proteinG = "protein_g"
         case carbsG = "carbs_g"
         case fatG = "fat_g"
+        case fiberG = "fiber_g"
+        case ingredients, preparation
+        case prepTimeMinutes = "prep_time_min"
+        case cookTimeMinutes = "cook_time_min"
+        case servings, difficulty, tips, allergens
+    }
+
+    /// Tiempo total en minutos (prep + coccion). Nil si no hay datos.
+    var totalTimeMinutes: Int? {
+        let prep = prepTimeMinutes ?? 0
+        let cook = cookTimeMinutes ?? 0
+        guard prep > 0 || cook > 0 else { return nil }
+        return prep + cook
+    }
+}
+
+/// Ingrediente de una comida del plan.
+struct PlanIngredient: Codable, Identifiable, Equatable, Hashable {
+    var id: String { name }
+    var name: String
+    var quantity: Double?
+    var unit: String?
+}
+
+/// Dificultad de preparacion de una comida del plan.
+/// El init custom normaliza tildes y mayusculas para tolerar
+/// variaciones que Gemini pueda devolver (ej: "Facil", "Fácil", "MEDIA").
+enum PlanMealDifficulty: String, Codable, CaseIterable {
+    case facil
+    case media
+    case alta
+
+    init(from decoder: Decoder) throws {
+        let raw = (try? decoder.singleValueContainer().decode(String.self)) ?? ""
+        let normalized = raw.lowercased()
+            .replacingOccurrences(of: "á", with: "a")
+            .replacingOccurrences(of: "é", with: "e")
+            .replacingOccurrences(of: "í", with: "i")
+            .replacingOccurrences(of: "ó", with: "o")
+            .replacingOccurrences(of: "ú", with: "u")
+        switch normalized {
+        case "facil": self = .facil
+        case "media", "medio": self = .media
+        case "alta", "alto": self = .alta
+        default: self = .facil
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .facil: return "Facil"
+        case .media: return "Media"
+        case .alta: return "Alta"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .facil: return "1.circle.fill"
+        case .media: return "2.circle.fill"
+        case .alta: return "3.circle.fill"
+        }
     }
 }
 

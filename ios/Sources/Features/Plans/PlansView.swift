@@ -9,6 +9,7 @@ struct PlansView: View {
     @State private var showGenerateSheet: Bool = false
     @State private var selectedDayIndex: Int = 0
     @State private var selectedPlanForDetail: MealPlan?
+    @State private var selectedMealForDetail: PlanMeal?
 
     var body: some View {
         NavigationStack {
@@ -73,6 +74,9 @@ struct PlansView: View {
                 PlanDetailView(plan: plan, viewModel: viewModel) {
                     selectedPlanForDetail = nil
                 }
+            }
+            .sheet(item: $selectedMealForDetail) { meal in
+                PlanMealDetailView(meal: meal, viewModel: viewModel)
             }
         }
     }
@@ -209,8 +213,13 @@ struct PlansView: View {
                         .padding(.horizontal)
 
                     ForEach(day.meals) { meal in
-                        PlanMealCard(meal: meal)
-                            .padding(.horizontal)
+                        Button {
+                            selectedMealForDetail = meal
+                        } label: {
+                            PlanMealCard(meal: meal)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal)
                     }
                 }
             }
@@ -326,11 +335,29 @@ private struct PlanMealCard: View {
                     .foregroundStyle(.secondary)
                 Text(meal.name)
                     .font(.subheadline.weight(.medium))
+                    .lineLimit(2)
                 if let notes = meal.notes, !notes.isEmpty {
                     Text(notes)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(1)
+                }
+                // Metadata rapida: tiempo + dificultad
+                if meal.totalTimeMinutes != nil || meal.difficulty != nil {
+                    HStack(spacing: 8) {
+                        if let mins = meal.totalTimeMinutes {
+                            Label("\(mins) min", systemImage: "clock")
+                        }
+                        if let diff = meal.difficulty {
+                            Label(diff.label, systemImage: diff.icon)
+                                .foregroundStyle(colorForDifficulty(diff))
+                        }
+                        if let ings = meal.ingredients, !ings.isEmpty {
+                            Label("\(ings.count) ing.", systemImage: "list.bullet")
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 }
             }
 
@@ -346,9 +373,21 @@ private struct PlanMealCard: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
         .padding(12)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func colorForDifficulty(_ d: PlanMealDifficulty) -> Color {
+        switch d {
+        case .facil: return .green
+        case .media: return .orange
+        case .alta: return .red
+        }
     }
 }
 
@@ -475,6 +514,7 @@ private struct PlanDetailView: View {
 
     @State private var selectedDayIndex: Int = 0
     @State private var showDeleteConfirm: Bool = false
+    @State private var selectedMealForDetail: PlanMeal?
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
@@ -555,8 +595,13 @@ private struct PlanDetailView: View {
                                 .padding(.horizontal)
 
                             ForEach(day.meals) { meal in
-                                PlanMealCard(meal: meal)
-                                    .padding(.horizontal)
+                                Button {
+                                    selectedMealForDetail = meal
+                                } label: {
+                                    PlanMealCard(meal: meal)
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.horizontal)
                             }
                         }
                     }
@@ -569,6 +614,9 @@ private struct PlanDetailView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cerrar") { dismiss() }
                 }
+            }
+            .sheet(item: $selectedMealForDetail) { meal in
+                PlanMealDetailView(meal: meal, viewModel: viewModel)
             }
             .confirmationDialog("¿Borrar este plan?", isPresented: $showDeleteConfirm) {
                 Button("Borrar", role: .destructive) {
@@ -632,5 +680,404 @@ private struct PlanDetailView: View {
             }
         }
         .padding(.horizontal)
+    }
+}
+
+// MARK: - Plan Meal Detail View
+
+private struct PlanMealDetailView: View {
+    let meal: PlanMeal
+    @ObservedObject var viewModel: PlansViewModel
+
+    @State private var isLogging: Bool = false
+    @State private var logResult: LogResult?
+    @Environment(\.dismiss) var dismiss
+
+    enum LogResult {
+        case success
+        case failure(String)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 20) {
+                    headerSection
+                    macrosSection
+                    metaSection
+                    ingredientsSection
+                    preparationSection
+                    tipsSection
+                    allergensSection
+                    logButton
+                }
+                .padding(.vertical)
+            }
+            .navigationTitle(meal.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cerrar") { dismiss() }
+                }
+            }
+            .alert("Comida registrada", isPresented: Binding(
+                get: { logResult != nil },
+                set: { if !$0 { logResult = nil } }
+            )) {
+                Button("OK") { logResult = nil }
+            } message: {
+                if case .failure(let msg) = logResult {
+                    Text(msg)
+                } else {
+                    Text("\(meal.name) añadida a tu registro de hoy.")
+                }
+            }
+        }
+    }
+
+    // MARK: - Header
+
+    private var headerSection: some View {
+        VStack(spacing: 12) {
+            Image(systemName: meal.type.icon)
+                .font(.system(size: 48))
+                .foregroundStyle(.green.gradient)
+
+            Text(meal.type.label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            if let notes = meal.notes, !notes.isEmpty {
+                Text(notes)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 8)
+    }
+
+    // MARK: - Macros
+
+    private var macrosSection: some View {
+        VStack(spacing: 12) {
+            // Kcal principal
+            if let kcal = meal.kcal {
+                VStack(spacing: 2) {
+                    Text("\(Int(kcal))")
+                        .font(.system(size: 40, weight: .bold))
+                        .foregroundStyle(.orange)
+                    Text("kcal")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            // Macros detallados
+            HStack(spacing: 12) {
+                MacroPill(label: "Proteina", value: meal.proteinG, unit: "g", color: .red)
+                MacroPill(label: "Carbos", value: meal.carbsG, unit: "g", color: .blue)
+                MacroPill(label: "Grasas", value: meal.fatG, unit: "g", color: .yellow)
+                MacroPill(label: "Fibra", value: meal.fiberG, unit: "g", color: .brown)
+            }
+        }
+        .padding()
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal)
+    }
+
+    // MARK: - Metadata (tiempo, dificultad, raciones)
+
+    private var metaSection: some View {
+        let hasMeta = meal.totalTimeMinutes != nil || meal.difficulty != nil || meal.servings != nil
+        return Group {
+            if hasMeta {
+                HStack(spacing: 16) {
+                    if let total = meal.totalTimeMinutes {
+                        MetaChip(icon: "clock", label: "\(total) min", subtitle: tiempoDesglose)
+                    }
+                    if let diff = meal.difficulty {
+                        MetaChip(icon: diff.icon, label: diff.label, subtitle: "Dificultad", color: colorForDifficulty(diff))
+                    }
+                    if let servings = meal.servings {
+                        MetaChip(icon: "person.2", label: "\(servings)", subtitle: servings == 1 ? "Racion" : "Raciones")
+                    }
+                }
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    private var tiempoDesglose: String {
+        let prep = meal.prepTimeMinutes ?? 0
+        let cook = meal.cookTimeMinutes ?? 0
+        if prep > 0 && cook > 0 {
+            return "prep \(prep) + coc \(cook)"
+        } else if prep > 0 {
+            return "prep \(prep)"
+        } else if cook > 0 {
+            return "coc \(cook)"
+        }
+        return "tiempo total"
+    }
+
+    // MARK: - Ingredientes
+
+    private var ingredientsSection: some View {
+        Group {
+            if let ings = meal.ingredients, !ings.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("Ingredientes", systemImage: "list.bullet.rectangle")
+                        .font(.headline)
+
+                    VStack(spacing: 8) {
+                        ForEach(Array(ings.enumerated()), id: \.element.id) { index, ing in
+                            HStack {
+                                Text(ing.name)
+                                    .font(.subheadline)
+                                Spacer()
+                                if let q = ing.quantity, let u = ing.unit {
+                                    Text("\(formatQuantity(q)) \(u)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                } else if let q = ing.quantity {
+                                    Text(formatQuantity(q))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                } else if let u = ing.unit, !u.isEmpty {
+                                    Text(u)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            if index < ings.count - 1 {
+                                Divider()
+                            }
+                        }
+                    }
+                }
+                .padding()
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    // MARK: - Preparacion
+
+    private var preparationSection: some View {
+        Group {
+            if let prep = meal.preparation, !prep.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("Preparacion", systemImage: "fork.knife")
+                        .font(.headline)
+
+                    Text(prep)
+                        .font(.body)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding()
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    // MARK: - Tips
+
+    private var tipsSection: some View {
+        Group {
+            if let tips = meal.tips, !tips.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("Tips", systemImage: "lightbulb.fill")
+                        .font(.headline)
+                        .foregroundStyle(.yellow)
+
+                    Text(tips)
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding()
+                .background(Color.yellow.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    // MARK: - Alérgenos
+
+    private var allergensSection: some View {
+        Group {
+            if let allergens = meal.allergens, !allergens.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Alérgenos", systemImage: "exclamationmark.triangle.fill")
+                        .font(.headline)
+                        .foregroundStyle(.orange)
+
+                    FlowLayout(spacing: 8) {
+                        ForEach(allergens, id: \.self) { allergen in
+                            Text(allergen.capitalized)
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Color.orange.opacity(0.15), in: Capsule())
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+                .padding()
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    // MARK: - Registrar comida
+
+    private var logButton: some View {
+        Button {
+            Task {
+                isLogging = true
+                let ok = await viewModel.logMealFromPlan(meal)
+                isLogging = false
+                logResult = ok ? .success : .failure(viewModel.errorMessage ?? "Error desconocido")
+            }
+        } label: {
+            HStack {
+                if isLogging {
+                    ProgressView().tint(.white)
+                } else {
+                    Image(systemName: "plus.circle.fill")
+                }
+                Text(isLogging ? "Registrando..." : "Registrar como comida de hoy")
+            }
+            .font(.headline)
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(.green, in: RoundedRectangle(cornerRadius: 14))
+        }
+        .disabled(isLogging)
+        .padding(.horizontal)
+        .padding(.top, 8)
+    }
+
+    // MARK: - Helpers
+
+    private func formatQuantity(_ q: Double) -> String {
+        q == q.rounded() ? String(Int(q)) : String(format: "%.1f", q)
+    }
+
+    private func colorForDifficulty(_ d: PlanMealDifficulty) -> Color {
+        switch d {
+        case .facil: return .green
+        case .media: return .orange
+        case .alta: return .red
+        }
+    }
+}
+
+// MARK: - Macro Pill
+
+private struct MacroPill: View {
+    let label: String
+    let value: Double?
+    let unit: String
+    let color: Color
+
+    var body: some View {
+        VStack(spacing: 2) {
+            if let v = value {
+                Text("\(Int(v))\(unit)")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(color)
+            } else {
+                Text("--")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+// MARK: - Meta Chip
+
+private struct MetaChip: View {
+    let icon: String
+    let label: String
+    let subtitle: String
+    var color: Color = .primary
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(color)
+            Text(label)
+                .font(.subheadline.weight(.semibold))
+            Text(subtitle)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+// MARK: - Flow Layout (para tags de alérgenos)
+
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var rows: [[LayoutSubviews.Element]] = [[]]
+        var currentRowWidth: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var currentRowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentRowWidth + size.width > maxWidth && !rows[rows.count - 1].isEmpty {
+                rows.append([])
+                totalHeight += currentRowHeight + spacing
+                currentRowWidth = 0
+                currentRowHeight = 0
+            }
+            rows[rows.count - 1].append(subview)
+            currentRowWidth += size.width + spacing
+            currentRowHeight = max(currentRowHeight, size.height)
+        }
+        totalHeight += currentRowHeight
+        return CGSize(width: maxWidth, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let maxWidth = bounds.width
+        var x: CGFloat = bounds.minX
+        var y: CGFloat = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > bounds.minX + maxWidth {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
