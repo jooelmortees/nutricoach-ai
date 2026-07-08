@@ -14,12 +14,20 @@ struct MessageRow: View {
     let onSaveMeal: (PendingMeal) async -> Bool
     var onRegenerate: (() -> Void)? = nil
 
+    @State private var wasStreaming = false
+
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
             contentStack
         }
         .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
         .padding(.vertical, 10)
+        .onChange(of: message.isStreaming) { _, streaming in
+            if streaming { wasStreaming = true }
+        }
+        .onAppear {
+            if message.isStreaming { wasStreaming = true }
+        }
     }
 
     @ViewBuilder
@@ -80,7 +88,22 @@ struct MessageRow: View {
             VStack(alignment: .leading, spacing: 6) {
                 if message.content.isEmpty && message.isStreaming {
                     StreamingDots()
+                } else if message.isStreaming {
+                    // Streaming en vivo: revelar letra por letra
+                    StreamingMarkdownView(text: message.content) { finished in
+                        if finished { wasStreaming = false }
+                    }
+                    if !message.content.isEmpty {
+                        StreamingDots()
+                            .padding(.top, 2)
+                    }
+                } else if wasStreaming {
+                    // Streaming acabo pero aun revelando texto pendiente
+                    StreamingMarkdownView(text: message.content) { finished in
+                        if finished { wasStreaming = false }
+                    }
                 } else if let extracted = PendingMeal.extract(from: message.content), let macros = extracted.macros {
+                    // Mensaje del historial con macros: sin animacion
                     if !extracted.cleaned.isEmpty {
                         MarkdownView(text: extracted.cleaned)
                     }
@@ -88,11 +111,8 @@ struct MessageRow: View {
                         await onSaveMeal(editedMeal)
                     })
                 } else {
+                    // Mensaje del historial: sin animacion
                     MarkdownView(text: message.content)
-                }
-                if message.isStreaming && !message.content.isEmpty {
-                    StreamingDots()
-                        .padding(.top, 2)
                 }
             }
             .contextMenu {
@@ -576,5 +596,47 @@ private struct MacroPill: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 4)
         .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - StreamingMarkdownView (solo para mensajes en streaming en vivo)
+
+/// Revela el texto del asistente letra por letra conforme llega via streaming.
+/// SOLO se usa cuando message.isStreaming == true (o wasStreaming == true tras
+/// terminar el streaming). Los mensajes del historial usan MarkdownView directo.
+///
+/// Patron basado en engeldlgado/toshllm StreamingRichText:
+/// - Timer.publish a 30fps (mas ligero que 60fps, suficiente para texto)
+/// - Catch-up proporcional: revealed + max(1, (target - revealed) / 8)
+/// - onFinished: callback cuando revealed alcanza text.count, para que
+///   MessageRow sepa que puede dejar de usar StreamingMarkdownView
+struct StreamingMarkdownView: View {
+    let text: String
+    var onFinished: ((Bool) -> Void)? = nil
+
+    @State private var revealed = 0
+    @State private var finishedReported = false
+
+    private let tick = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        MarkdownView(text: String(text.prefix(revealed)))
+            .onReceive(tick) { _ in
+                let target = text.count
+                guard revealed < target else {
+                    if !finishedReported {
+                        finishedReported = true
+                        onFinished?(true)
+                    }
+                    return
+                }
+                revealed = min(target, revealed + max(1, (target - revealed) / 8))
+            }
+            .onChange(of: text) { _, newValue in
+                if revealed > newValue.count {
+                    revealed = newValue.count
+                }
+                finishedReported = false
+            }
     }
 }
