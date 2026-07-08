@@ -82,17 +82,13 @@ struct MessageRow: View {
                     StreamingDots()
                 } else if let extracted = PendingMeal.extract(from: message.content), let macros = extracted.macros {
                     if !extracted.cleaned.isEmpty {
-                        MarkdownView(text: extracted.cleaned)
+                        StreamingMarkdownView(text: extracted.cleaned, isStreaming: message.isStreaming)
                     }
                     MacrosCard(meal: macros, onSave: { editedMeal in
                         await onSaveMeal(editedMeal)
                     })
                 } else {
-                    MarkdownView(text: message.content)
-                }
-                if message.isStreaming && !message.content.isEmpty {
-                    StreamingDots()
-                        .padding(.top, 2)
+                    StreamingMarkdownView(text: message.content, isStreaming: message.isStreaming)
                 }
             }
             .contextMenu {
@@ -623,5 +619,74 @@ struct TypewriterMarkdownView: View {
         if let t = timer {
             RunLoop.main.add(t, forMode: .common)
         }
+    }
+}
+
+// MARK: - StreamingMarkdownView (streaming del asistente letra por letra)
+
+/// Revela el texto del asistente letra por letra conforme llega via streaming.
+/// Mantiene un buffer interno: `targetText` es el texto completo que llega del
+/// backend, `displayedCount` es cuantos caracteres se han revelado. Un timer
+/// a 60fps incrementa displayedCount para suavizar los chunks que llegan de golpe.
+/// Cuando el streaming termina (isStreaming=false), revela todo lo pendiente.
+struct StreamingMarkdownView: View {
+    let text: String
+    let isStreaming: Bool
+
+    @State private var displayedCount: Int = 0
+    @State private var timer: Timer?
+    @State private var hasFinished = false
+
+    private let tickInterval: TimeInterval = 0.014  // ~71fps
+    private let charsPerTick: Int = 3
+
+    private var displayedText: String {
+        guard displayedCount < text.count else { return text }
+        return String(text.prefix(displayedCount))
+    }
+
+    var body: some View {
+        Group {
+            if hasFinished || (!isStreaming && displayedCount >= text.count) {
+                MarkdownView(text: text)
+            } else {
+                MarkdownView(text: displayedText)
+            }
+        }
+        .onAppear { startTimer() }
+        .onDisappear { stopTimer() }
+        .onChange(of: isStreaming) { _, streaming in
+            if !streaming {
+                // El streaming termino: revelar todo lo pendiente de golpe
+                displayedCount = text.count
+                stopTimer()
+                hasFinished = true
+            }
+        }
+    }
+
+    private func startTimer() {
+        stopTimer()
+        timer = Timer(timeInterval: tickInterval, repeats: true) { _ in
+            Task { @MainActor in
+                let target = text.count
+                if displayedCount >= target {
+                    if !isStreaming {
+                        stopTimer()
+                        hasFinished = true
+                    }
+                    return
+                }
+                displayedCount = min(target, displayedCount + charsPerTick)
+            }
+        }
+        if let t = timer {
+            RunLoop.main.add(t, forMode: .common)
+        }
+    }
+
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
     }
 }

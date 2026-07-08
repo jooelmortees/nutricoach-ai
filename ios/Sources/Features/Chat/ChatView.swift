@@ -371,33 +371,32 @@ struct ChatView: View {
     }
 }
 
-// MARK: - Thinking indicator (onda suave estilo waveform)
+// MARK: - Thinking indicator (3 puntos saltantes estilo iMessage)
 
 struct ThinkingIndicator: View {
     @State private var phase: CGFloat = 0
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<5) { i in
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.green.opacity(0.5))
-                    .frame(width: 4, height: barHeight(for: i))
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .fill(Color.secondary.opacity(0.6))
+                    .frame(width: 7, height: 7)
+                    .scaleEffect(phase == CGFloat(i) ? 1.3 : 0.7)
+                    .offset(y: phase == CGFloat(i) ? -5 : 0)
                     .animation(
-                        .smooth(duration: 0.8)
-                            .repeatForever(autoreverses: true)
+                        .spring(duration: 0.5, bounce: 0.6)
                             .delay(Double(i) * 0.12),
                         value: phase
                     )
             }
         }
+        .frame(height: 20)
         .onAppear {
-            phase = 1
+            withAnimation(.spring(duration: 0.5, bounce: 0.6).repeatForever()) {
+                phase = 3
+            }
         }
-    }
-
-    private func barHeight(for index: Int) -> CGFloat {
-        let heights: [CGFloat] = [8, 14, 20, 14, 8]
-        return heights[index]
     }
 }
 
