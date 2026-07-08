@@ -60,7 +60,7 @@ struct MessageRow: View {
                         await onSaveMeal(editedMeal)
                     })
                 } else {
-                    MarkdownView(text: message.content)
+                    TypewriterMarkdownView(text: message.content)
                 }
             }
             .padding(.horizontal, 14)
@@ -576,5 +576,52 @@ private struct MacroPill: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 4)
         .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - TypewriterMarkdownView (animacion letra por letra para mensajes del usuario)
+
+/// Revela el texto letra por letra con animacion fluida y ultra rapida.
+/// Usa un timer a 60fps (16ms) que incrementa 2 caracteres por tick,
+/// dando una sensacion de escritura instantanea pero visible.
+struct TypewriterMarkdownView: View {
+    let text: String
+    @State private var revealedCount: Int = 0
+    @State private var timer: Timer?
+
+    private let tickInterval: TimeInterval = 0.015  // ~66fps
+    private let charsPerTick: Int = 2
+
+    var body: some View {
+        Group {
+            if revealedCount >= text.count {
+                MarkdownView(text: text)
+            } else {
+                MarkdownView(text: String(text.prefix(revealedCount)))
+                    .opacity(0.85)
+            }
+        }
+        .onAppear { startReveal() }
+        .onDisappear { timer?.invalidate() }
+    }
+
+    private func startReveal() {
+        guard revealedCount < text.count else { return }
+        timer?.invalidate()
+        timer = Timer(timeInterval: tickInterval, repeats: true) { _ in
+            Task { @MainActor in
+                if revealedCount >= text.count {
+                    timer?.invalidate()
+                    timer = nil
+                    return
+                }
+                withAnimation(.easeOut(duration: 0.04)) {
+                    revealedCount = min(text.count, revealedCount + charsPerTick)
+                }
+            }
+        }
+        if let t = timer {
+            RunLoop.main.add(t, forMode: .common)
+        }
     }
 }
