@@ -25,7 +25,12 @@ const MAX_AGENT_ITERATIONS = 6;
 interface ChatRequest {
   conversation_id: string;
   message: string;
-  attachments?: Array<{ type: "image" | "video"; url: string }>;
+  attachments?: Array<{
+    type: "image" | "video" | "audio";
+    url?: string;
+    data?: string;
+    mime_type?: string;
+  }>;
 }
 
 serve(async (req) => {
@@ -52,8 +57,14 @@ serve(async (req) => {
 
     // 2. Parsear body
     const body: ChatRequest = await req.json();
-    if (!body.conversation_id || !body.message) {
-      return jsonError(400, "Missing conversation_id or message");
+    // Normalizar message: si viene undefined/null, lo convertimos a string vacío
+    // para evitar errores downstream (trim, insert en BD, etc.).
+    body.message = body.message ?? "";
+    const hasAttachments = (body.attachments ?? []).length > 0;
+    // Permitir message vacío si hay adjuntos (audio-only, image-only, audio+image).
+    // El cliente ya inyecta un fallback descriptivo, pero el backend debe tolerarlo.
+    if (!body.conversation_id || (!body.message && !hasAttachments)) {
+      return jsonError(400, "Missing conversation_id or message/attachments");
     }
 
     // 3. Cliente con service_role (bypasea RLS) para el agente
@@ -80,11 +91,29 @@ serve(async (req) => {
         image_url: { url: att.url },
       });
     }
+    // Audio: inline_data como input_audio (formato OpenAI-compatible soportado por Gemini).
+    // El cliente envía WAV (PCM 16-bit) en base64 con mime_type "audio/wav".
+    const audioAttachments = (body.attachments ?? []).filter((a) => a.type === "audio" && !!a.data);
+    for (const att of audioAttachments) {
+      userContent.push({
+        type: "input_audio",
+        input_audio: { data: att.data!, format: "wav" },
+      });
+    }
     let displayMessage = body.message;
-    if (imageAttachments.length > 0) {
+    if (imageAttachments.length > 0 && audioAttachments.length > 0) {
+      // Imagen + audio: prompt conjunto
+      const prefix = body.message.trim() ? body.message + "\n\n" : "";
+      displayMessage = prefix +
+        "Analiza esta imagen de comida y escucha el audio del usuario. " +
+        "Devuelve las macros estimadas (kcal, proteínas, carbohidratos, grasas) en formato JSON al inicio de tu respuesta, seguido de un comentario en español.";
+    } else if (imageAttachments.length > 0) {
       displayMessage = body.message +
         (body.message.trim() ? "" : "\n\n") +
         "\n\nAnaliza esta imagen de comida y devuelve las macros estimadas (kcal, proteínas, carbohidratos, grasas) en formato JSON al inicio de tu respuesta, seguido de un comentario en español.";
+    } else if (audioAttachments.length > 0 && !body.message.trim()) {
+      // Audio sin texto ni imagen: fallback descriptivo
+      displayMessage = "Escucha este audio del usuario y responde.";
     }
     userContent.push({ type: "text", text: displayMessage });
 

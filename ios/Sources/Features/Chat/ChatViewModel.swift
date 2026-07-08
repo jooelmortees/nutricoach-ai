@@ -115,10 +115,20 @@ final class ChatViewModel: ObservableObject {
         var displayAttachments: [MessageAttachment] = []
         var agentAttachments: [AgentAttachment] = []
         var displayText = trimmed
+        // Texto que se muestra en la burbuja del usuario (diferente del que va al backend).
+        var uiText = trimmed
+        // Fallbacks cuando no hay texto: el backend exige message no vacío,
+        // así que inyectamos un prompt descriptor según el tipo de contenido.
         if hasAttachments && !hasText && !hasAudio {
             displayText = "Que macros tiene esta comida?"
+            uiText = "📷 Imagen"
         }
-        if hasAudio && !hasText { displayText = "" }
+        if hasAudio && !hasText {
+            displayText = hasAttachments
+                ? "Analiza esta imagen y escucha el audio del usuario."
+                : "Escucha este audio del usuario y responde."
+            uiText = hasAttachments ? "🎵 Audio + 📷 Imagen" : "🎵 Audio"
+        }
         let toUpload = pendingAttachments
         for attachment in toUpload {
             do {
@@ -131,10 +141,10 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
-        // 2. Adjuntar audio como base64
+        // 2. Adjuntar audio como base64 (WAV para máxima compatibilidad con Gemini)
         if let audio = audioData {
             let base64 = audio.base64EncodedString()
-            agentAttachments.append(AgentAttachment(type: "audio", data: base64, mime_type: "audio/m4a"))
+            agentAttachments.append(AgentAttachment(type: "audio", data: base64, mime_type: "audio/wav"))
         }
 
         // 3. Limpiar adjuntos pendientes
@@ -143,7 +153,7 @@ final class ChatViewModel: ObservableObject {
         // 4. Añadir mensaje del usuario a la UI
         let userMsg = ChatMessage(
             role: .user,
-            content: displayText.isEmpty ? "[Audio]" : displayText,
+            content: uiText.isEmpty ? "[Audio]" : uiText,
             attachments: displayAttachments
         )
         messages.append(userMsg)

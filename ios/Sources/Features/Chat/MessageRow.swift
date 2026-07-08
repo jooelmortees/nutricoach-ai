@@ -19,7 +19,7 @@ struct MessageRow: View {
             contentStack
         }
         .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
     }
 
     @ViewBuilder

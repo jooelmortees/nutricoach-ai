@@ -230,55 +230,16 @@ struct ChatView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
             }
-            if isRecordingAudio {
-                HStack(spacing: 8) {
-                    Image(systemName: "waveform")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                    Text("Grabando...")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                    Spacer()
-                    Button {
-                        cancelAudioRecording()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
-                .background(.red.opacity(0.08))
-            }
-            if audioRecorder.audioData != nil && !isRecordingAudio {
-                HStack(spacing: 8) {
-                    Image(systemName: "speaker.wave.2.fill")
-                        .font(.caption)
-                        .foregroundStyle(.green)
-                    Text("Audio listo")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        audioRecorder.audioData = nil
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
-                .background(.green.opacity(0.08))
-            }
 
-            // Nueva barra de entrada estilo Claude
+            // Barra de entrada estilo Claude
             ChatInputBar(
                 text: $inputText,
                 placeholder: inputPlaceholder,
                 isAgentThinking: viewModel.isAgentThinking,
                 isRecordingAudio: isRecordingAudio,
+                hasReadyAudio: audioRecorder.audioData != nil,
+                hasAttachments: !viewModel.pendingAttachments.isEmpty,
+                recorder: audioRecorder,
                 onPlusTap: {
                     inputFocused = false
                     Task { await photoLibrary.requestAccessAndLoadRecent(limit: 12) }
@@ -287,13 +248,23 @@ struct ChatView: View {
                     }
                 },
                 onMicTap: {
-                    if isRecordingAudio {
+                    if hasReadyAudio {
+                        // Descartar audio anterior y grabar uno nuevo
+                        audioRecorder.audioData = nil
+                        startAudioRecording()
+                    } else if isRecordingAudio {
                         stopAudioRecording()
                     } else {
                         startAudioRecording()
                     }
                 },
+                onCancelRecording: {
+                    cancelAudioRecording()
+                },
                 onSend: {
+                    if isRecordingAudio {
+                        stopAudioRecording()
+                    }
                     Task { await send() }
                 },
                 isFocused: $inputFocused
@@ -304,6 +275,18 @@ struct ChatView: View {
         .animation(.easeInOut(duration: 0.2), value: viewModel.isAgentThinking)
         .animation(.easeInOut(duration: 0.2), value: isRecordingAudio)
         .animation(.easeInOut(duration: 0.2), value: audioRecorder.audioData != nil)
+        // Sincronizar isRecordingAudio con el estado real del recorder.
+        // El recorder puede pararse solo al llegar al límite de 3 min;
+        // en ese caso isRecordingAudio (State local) debe refrescarse.
+        .onChange(of: audioRecorder.isRecording) { _, newValue in
+            if !newValue && isRecordingAudio {
+                isRecordingAudio = false
+            }
+        }
+    }
+
+    private var hasReadyAudio: Bool {
+        audioRecorder.audioData != nil
     }
 
     private var inputPlaceholder: String {
