@@ -625,10 +625,11 @@ struct TypewriterMarkdownView: View {
 // MARK: - StreamingMarkdownView (streaming del asistente letra por letra)
 
 /// Revela el texto del asistente letra por letra conforme llega via streaming.
-/// Mantiene un buffer interno: `targetText` es el texto completo que llega del
+/// Mantiene un buffer interno: `text` es el texto completo que llega del
 /// backend, `displayedCount` es cuantos caracteres se han revelado. Un timer
-/// a 60fps incrementa displayedCount para suavizar los chunks que llegan de golpe.
-/// Cuando el streaming termina (isStreaming=false), revela todo lo pendiente.
+/// a 71fps incrementa displayedCount con catch-up proporcional: cuando hay
+/// mucho texto pendiente, revela mas caracteres por tick (ease-out) para no
+/// quedarse atras. Inspirado en engeldlgado/toshllm StreamingRichText.
 struct StreamingMarkdownView: View {
     let text: String
     let isStreaming: Bool
@@ -638,7 +639,6 @@ struct StreamingMarkdownView: View {
     @State private var hasFinished = false
 
     private let tickInterval: TimeInterval = 0.014  // ~71fps
-    private let charsPerTick: Int = 3
 
     private var displayedText: String {
         guard displayedCount < text.count else { return text }
@@ -647,7 +647,7 @@ struct StreamingMarkdownView: View {
 
     var body: some View {
         Group {
-            if hasFinished || (!isStreaming && displayedCount >= text.count) {
+            if hasFinished {
                 MarkdownView(text: text)
             } else {
                 MarkdownView(text: displayedText)
@@ -655,12 +655,10 @@ struct StreamingMarkdownView: View {
         }
         .onAppear { startTimer() }
         .onDisappear { stopTimer() }
-        .onChange(of: isStreaming) { _, streaming in
-            if !streaming {
-                // El streaming termino: revelar todo lo pendiente de golpe
-                displayedCount = text.count
-                stopTimer()
-                hasFinished = true
+        .onChange(of: text) { _, newValue in
+            // Si el texto se redujo (regeneracion), resetear
+            if displayedCount > newValue.count {
+                displayedCount = newValue.count
             }
         }
     }
@@ -670,14 +668,20 @@ struct StreamingMarkdownView: View {
         timer = Timer(timeInterval: tickInterval, repeats: true) { _ in
             Task { @MainActor in
                 let target = text.count
-                if displayedCount >= target {
+                guard displayedCount < target else {
                     if !isStreaming {
                         stopTimer()
                         hasFinished = true
                     }
                     return
                 }
-                displayedCount = min(target, displayedCount + charsPerTick)
+                // Catch-up ease-out: revela mas caracteres cuando hay mas
+                // backlog. minimo 2 chars/tick para no ir demasiado lento
+                // cuando el streaming es constante. maximo 30 chars/tick
+                // para que no parezca instantaneo en bloques grandes.
+                let backlog = target - displayedCount
+                let charsThisTick = max(2, min(30, backlog / 6))
+                displayedCount = min(target, displayedCount + charsThisTick)
             }
         }
         if let t = timer {
