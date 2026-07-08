@@ -60,10 +60,12 @@ struct ChatInputBar: View {
     }
 
     var body: some View {
-        if isRecordingAudio {
-            recordingBar
-        } else {
-            normalBar
+        Group {
+            if isRecordingAudio {
+                recordingBar
+            } else {
+                normalBar
+            }
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
