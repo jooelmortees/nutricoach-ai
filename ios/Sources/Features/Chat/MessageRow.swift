@@ -60,7 +60,7 @@ struct MessageRow: View {
                         await onSaveMeal(editedMeal)
                     })
                 } else {
-                    TypewriterMarkdownView(text: message.content)
+                    MarkdownView(text: message.content)
                 }
             }
             .padding(.horizontal, 14)
@@ -82,13 +82,17 @@ struct MessageRow: View {
                     StreamingDots()
                 } else if let extracted = PendingMeal.extract(from: message.content), let macros = extracted.macros {
                     if !extracted.cleaned.isEmpty {
-                        StreamingMarkdownView(text: extracted.cleaned, isStreaming: message.isStreaming)
+                        MarkdownView(text: extracted.cleaned)
                     }
                     MacrosCard(meal: macros, onSave: { editedMeal in
                         await onSaveMeal(editedMeal)
                     })
                 } else {
-                    StreamingMarkdownView(text: message.content, isStreaming: message.isStreaming)
+                    MarkdownView(text: message.content)
+                }
+                if message.isStreaming && !message.content.isEmpty {
+                    StreamingDots()
+                        .padding(.top, 2)
                 }
             }
             .contextMenu {
@@ -572,125 +576,5 @@ private struct MacroPill: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 4)
         .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-// MARK: - TypewriterMarkdownView (animacion letra por letra para mensajes del usuario)
-
-/// Revela el texto letra por letra con animacion fluida y ultra rapida.
-/// Usa un timer a 60fps (16ms) que incrementa 2 caracteres por tick,
-/// dando una sensacion de escritura instantanea pero visible.
-struct TypewriterMarkdownView: View {
-    let text: String
-    @State private var revealedCount: Int = 0
-    @State private var timer: Timer?
-
-    private let tickInterval: TimeInterval = 0.015  // ~66fps
-    private let charsPerTick: Int = 2
-
-    var body: some View {
-        Group {
-            if revealedCount >= text.count {
-                MarkdownView(text: text)
-            } else {
-                MarkdownView(text: String(text.prefix(revealedCount)))
-                    .opacity(0.85)
-            }
-        }
-        .onAppear { startReveal() }
-        .onDisappear { timer?.invalidate() }
-    }
-
-    private func startReveal() {
-        guard revealedCount < text.count else { return }
-        timer?.invalidate()
-        timer = Timer(timeInterval: tickInterval, repeats: true) { _ in
-            Task { @MainActor in
-                if revealedCount >= text.count {
-                    timer?.invalidate()
-                    timer = nil
-                    return
-                }
-                withAnimation(.easeOut(duration: 0.04)) {
-                    revealedCount = min(text.count, revealedCount + charsPerTick)
-                }
-            }
-        }
-        if let t = timer {
-            RunLoop.main.add(t, forMode: .common)
-        }
-    }
-}
-
-// MARK: - StreamingMarkdownView (streaming del asistente letra por letra)
-
-/// Revela el texto del asistente letra por letra conforme llega via streaming.
-/// Mantiene un buffer interno: `text` es el texto completo que llega del
-/// backend, `displayedCount` es cuantos caracteres se han revelado. Un timer
-/// a 71fps incrementa displayedCount con catch-up proporcional: cuando hay
-/// mucho texto pendiente, revela mas caracteres por tick (ease-out) para no
-/// quedarse atras. Inspirado en engeldlgado/toshllm StreamingRichText.
-struct StreamingMarkdownView: View {
-    let text: String
-    let isStreaming: Bool
-
-    @State private var displayedCount: Int = 0
-    @State private var timer: Timer?
-    @State private var hasFinished = false
-
-    private let tickInterval: TimeInterval = 0.014  // ~71fps
-
-    private var displayedText: String {
-        guard displayedCount < text.count else { return text }
-        return String(text.prefix(displayedCount))
-    }
-
-    var body: some View {
-        Group {
-            if hasFinished {
-                MarkdownView(text: text)
-            } else {
-                MarkdownView(text: displayedText)
-            }
-        }
-        .onAppear { startTimer() }
-        .onDisappear { stopTimer() }
-        .onChange(of: text) { _, newValue in
-            // Si el texto se redujo (regeneracion), resetear
-            if displayedCount > newValue.count {
-                displayedCount = newValue.count
-            }
-        }
-    }
-
-    private func startTimer() {
-        stopTimer()
-        timer = Timer(timeInterval: tickInterval, repeats: true) { _ in
-            Task { @MainActor in
-                let target = text.count
-                guard displayedCount < target else {
-                    if !isStreaming {
-                        stopTimer()
-                        hasFinished = true
-                    }
-                    return
-                }
-                // Catch-up ease-out: revela mas caracteres cuando hay mas
-                // backlog. minimo 2 chars/tick para no ir demasiado lento
-                // cuando el streaming es constante. maximo 30 chars/tick
-                // para que no parezca instantaneo en bloques grandes.
-                let backlog = target - displayedCount
-                let charsThisTick = max(2, min(30, backlog / 6))
-                displayedCount = min(target, displayedCount + charsThisTick)
-            }
-        }
-        if let t = timer {
-            RunLoop.main.add(t, forMode: .common)
-        }
-    }
-
-    private func stopTimer() {
-        timer?.invalidate()
-        timer = nil
     }
 }
