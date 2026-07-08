@@ -292,7 +292,7 @@ struct ChatView: View {
     }
 
     private var inputPlaceholder: String {
-        "Chatear con Claude"
+        "Chatear con NutriCoach"
     }
 
     private func send() async {

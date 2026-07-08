@@ -93,7 +93,14 @@ serve(async (req) => {
     }
     // Audio: inline_data como input_audio (formato OpenAI-compatible soportado por Gemini).
     // El cliente envía WAV (PCM 16-bit) en base64 con mime_type "audio/wav".
+    // NOTA: Verificado empiricamente 2026-07-08: Gemini 3.5 Flash NO procesa
+    // audio en modo streaming (stream:true). El audio llega pero Gemini
+    // responde "no he podido escuchar el audio". Sin streaming (stream:false)
+    // el audio SÍ se procesa (confirmado con promptTokensDetails AUDIO=25).
+    // Solucion: cuando hay audio, hacemos la llamada sin streaming y emitimos
+    // la respuesta completa como eventos SSE al cliente.
     const audioAttachments = (body.attachments ?? []).filter((a) => a.type === "audio" && !!a.data);
+    const hasAudio = audioAttachments.length > 0;
     for (const att of audioAttachments) {
       userContent.push({
         type: "input_audio",
@@ -138,7 +145,14 @@ serve(async (req) => {
 
         try {
           for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration++) {
-            // Hacer request a Gemini con streaming
+            // Hacer request a Gemini.
+            // NOTA: cuando hay audio (hasAudio && iteration === 0), usamos
+            // stream: false porque Gemini 3.5 Flash NO procesa audio en
+            // modo streaming (verificado empiricamente 2026-07-08: el audio
+            // llega pero Gemini responde "no he podido escuchar el audio"
+            // con stream:true, mientras que con stream:false el audio se
+            // procesa correctamente con promptTokensDetails AUDIO=25).
+            const useStreaming = !(hasAudio && iteration === 0);
             const upstreamResp = await fetch(`${GEMINI_BASE_URL}/chat/completions`, {
               method: "POST",
               headers: {
@@ -149,7 +163,7 @@ serve(async (req) => {
                 model: GEMINI_MODEL,
                 messages: apiMessages,
                 tools,
-                stream: true,
+                stream: useStreaming,
                 max_completion_tokens: 16384,
                 reasoning_effort: "medium",
                 // IMPORTANTE: Gemini 3.5 Flash emite el thinking en delta.content
@@ -163,6 +177,101 @@ serve(async (req) => {
               const errText = await upstreamResp.text();
               controller.enqueue(encoder.encode(sseEvent("error", { message: `Gemini error ${upstreamResp.status}: ${errText}` })));
               return;
+            }
+
+            // Si no hay streaming (audio en primera iteracion), parsear JSON unico
+            if (!useStreaming) {
+              const data = await upstreamResp.json();
+              const choice = data.choices?.[0];
+              if (!choice) {
+                controller.enqueue(encoder.encode(sseEvent("error", { message: "Gemini: respuesta vacia" })));
+                return;
+              }
+              const message = choice.message;
+              let iterThinking = "";
+              let iterText = "";
+              let toolCalls: any[] = [];
+
+              // Parsear thinking (<thought>...</thought> en content)
+              if (message?.content) {
+                const thinkMatch = message.content.match(/<thought>([\s\S]*?)<\/thought>/);
+                if (thinkMatch) {
+                  iterThinking = thinkMatch[1];
+                  iterText = message.content.substring(thinkMatch.index! + thinkMatch[0].length);
+                } else {
+                  iterText = message.content;
+                }
+              }
+
+              // Emitir thinking
+              if (iterThinking) {
+                controller.enqueue(encoder.encode(sseEvent("thinking", { text: iterThinking })));
+              }
+              // Emitir texto
+              if (iterText) {
+                controller.enqueue(encoder.encode(sseEvent("text", { text: iterText })));
+              }
+              fullText = iterText;
+
+              // Tool calls
+              if (message?.tool_calls) {
+                for (const tc of message.tool_calls) {
+                  toolCalls.push({
+                    id: tc.id,
+                    type: "function",
+                    function: { name: tc.function.name, arguments: tc.function.arguments },
+                    thought_signature: tc.extra_content?.google?.thought_signature ?? null,
+                  });
+                }
+              }
+
+              // Si no hay tool_calls, guardar y terminar
+              if (toolCalls.length === 0) {
+                if (!assistantMessageSaved && (fullText || iterThinking)) {
+                  await saveAssistantMessage(
+                    supabaseAdmin,
+                    body.conversation_id,
+                    fullText || iterText,
+                    iterThinking || null
+                  );
+                  assistantMessageSaved = true;
+                }
+                break;
+              }
+
+              // Hay tool_calls: ejecutar y continuar el loop
+              const toolNames = toolCalls.map(t => t.function.name);
+              controller.enqueue(encoder.encode(sseEvent("tools_start", { names: toolNames })));
+
+              apiMessages.push({
+                role: "assistant",
+                content: iterText || null,
+                tool_calls: toolCalls.map(tc => {
+                  const tcMsg: any = {
+                    id: tc.id,
+                    type: "function",
+                    function: { name: tc.function.name, arguments: tc.function.arguments },
+                  };
+                  if (tc.thought_signature) {
+                    tcMsg.extra_content = { google: { thought_signature: tc.thought_signature } };
+                  }
+                  return tcMsg;
+                })
+              });
+
+              for (const tc of toolCalls) {
+                const name = tc.function.name;
+                let args: any = {};
+                try { args = JSON.parse(tc.function.arguments || "{}"); } catch (_) { args = {}; }
+                const toolResult = await executeTool(name, args, supabaseAdmin, user.id, profile, facts);
+                controller.enqueue(encoder.encode(sseEvent("tool_done", { name, summary: toolResult.summary })));
+                apiMessages.push({
+                  role: "tool",
+                  tool_call_id: tc.id,
+                  content: toolResult.content
+                });
+              }
+              continue;
             }
 
             // Parsear el stream de Gemini
