@@ -9,7 +9,7 @@ struct DashboardView: View {
     @EnvironmentObject var auth: AuthManager
     @StateObject private var viewModel = DashboardViewModel()
     @ObservedObject private var healthKit = HealthKitManager.shared
-    @State private var selectedDayIndex: Int?
+    @State private var pressedDayIndex: Int?
 
     var body: some View {
         NavigationStack {
@@ -164,7 +164,7 @@ struct DashboardView: View {
                     .font(.headline)
                 Spacer()
             }
-            // Bar chart simple con 7 barras clickeables
+            // Bar chart con 7 barras. Mantener pulsado para ver detalle flotante.
             HStack(alignment: .bottom, spacing: 6) {
                 ForEach(0..<7, id: \.self) { i in
                     let value = viewModel.weeklySteps[i]
@@ -180,26 +180,29 @@ struct DashboardView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
-                    .onTapGesture {
-                        selectedDayIndex = i
-                    }
+                    .onLongPressGesture(minimumDuration: 0.15, pressing: { pressing in
+                        if pressing {
+                            pressedDayIndex = i
+                        } else {
+                            pressedDayIndex = nil
+                        }
+                    }, perform: {})
                 }
             }
             .frame(height: 110)
         }
         .padding()
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
-        .sheet(item: Binding(
-            get: { selectedDayIndex.map { DayDetail(index: $0) } },
-            set: { selectedDayIndex = $0?.index }
-        )) { detail in
-            dayDetailSheet(for: detail.index)
-                .presentationDetents([.height(220)])
-                .presentationDragIndicator(.visible)
+        .overlay(alignment: .top) {
+            if let idx = pressedDayIndex {
+                dayTooltip(for: idx)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    .animation(.easeInOut(duration: 0.15), value: pressedDayIndex)
+            }
         }
     }
 
-    private func dayDetailSheet(for index: Int) -> some View {
+    private func dayTooltip(for index: Int) -> some View {
         let steps = viewModel.weeklySteps[index]
         let kcal = viewModel.weeklyActiveEnergy[index]
         let dayName = fullDayName(index)
@@ -208,46 +211,34 @@ struct DashboardView: View {
         let date = calendar.date(byAdding: .day, value: -dateOffset, to: calendar.startOfDay(for: Date())) ?? Date()
         let dateText = date.formatted(date: .abbreviated, time: .omitted)
 
-        return VStack(spacing: 16) {
-            VStack(spacing: 4) {
-                Text(dayName)
-                    .font(.title2.bold())
-                Text(dateText)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Divider()
-
-            HStack(spacing: 24) {
-                VStack(spacing: 8) {
+        return VStack(spacing: 8) {
+            Text("\(dayName) \(dateText)")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+            HStack(spacing: 20) {
+                HStack(spacing: 6) {
                     Image(systemName: "figure.walk")
-                        .font(.title2)
                         .foregroundStyle(.green)
-                    Text("\(steps)")
-                        .font(.title.bold())
-                    Text("pasos")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text("\(steps) pasos")
+                        .font(.subheadline.bold())
                 }
-                .frame(maxWidth: .infinity)
-
-                VStack(spacing: 8) {
+                HStack(spacing: 6) {
                     Image(systemName: "flame.fill")
-                        .font(.title2)
                         .foregroundStyle(.orange)
-                    Text("\(kcal)")
-                        .font(.title.bold())
-                    Text("kcal quemadas")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text("\(kcal) kcal")
+                        .font(.subheadline.bold())
                 }
-                .frame(maxWidth: .infinity)
             }
-
-            Spacer()
         }
-        .padding()
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+        .offset(y: -8)
     }
 
     private func fullDayName(_ index: Int) -> String {
@@ -530,9 +521,4 @@ final class DashboardViewModel: ObservableObject {
             // Silencioso
         }
     }
-}
-
-private struct DayDetail: Identifiable {
-    let index: Int
-    var id: Int { index }
 }
