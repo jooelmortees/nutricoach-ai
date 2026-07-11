@@ -9,7 +9,8 @@ struct DashboardView: View {
     @EnvironmentObject var auth: AuthManager
     @StateObject private var viewModel = DashboardViewModel()
     @ObservedObject private var healthKit = HealthKitManager.shared
-    @State private var pressedDayIndex: Int?
+    @GestureState private var pressedDayIndex: Int?
+    private let chartBarSpacing: CGFloat = 6
 
     var body: some View {
         NavigationStack {
@@ -164,30 +165,27 @@ struct DashboardView: View {
                     .font(.headline)
                 Spacer()
             }
-            // Bar chart con 7 barras. Mantener pulsado para ver detalle flotante.
-            HStack(alignment: .bottom, spacing: 6) {
-                ForEach(0..<7, id: \.self) { i in
-                    let value = viewModel.weeklySteps[i]
-                    let maxValue = viewModel.weeklySteps.max() ?? 1
-                    VStack(spacing: 4) {
-                        Spacer()
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(value > 0 ? Color.blue : Color(.tertiarySystemBackground))
-                            .frame(height: maxValue > 0 ? max(CGFloat(value) / CGFloat(maxValue) * 80, 4) : 4)
-                        Text(weekdayLabel(i))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
-                    .onLongPressGesture(minimumDuration: 0.15, pressing: { pressing in
-                        if pressing {
-                            pressedDayIndex = i
-                        } else {
-                            pressedDayIndex = nil
+            // Bar chart con 7 barras. Mantener pulsado y deslizar para recorrer los dias.
+            GeometryReader { geometry in
+                HStack(alignment: .bottom, spacing: chartBarSpacing) {
+                    ForEach(0..<7, id: \.self) { i in
+                        let value = viewModel.weeklySteps[i]
+                        let maxValue = viewModel.weeklySteps.max() ?? 1
+                        VStack(spacing: 4) {
+                            Spacer()
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(value > 0 ? Color.blue : Color(.tertiarySystemBackground))
+                                .frame(height: maxValue > 0 ? max(CGFloat(value) / CGFloat(maxValue) * 80, 4) : 4)
+                            Text(weekdayLabel(i))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
-                    }, perform: {})
+                        .frame(maxWidth: .infinity)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .simultaneousGesture(chartSelectionGesture(width: geometry.size.width))
             }
             .frame(height: 110)
         }
@@ -239,6 +237,19 @@ struct DashboardView: View {
         )
         .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
         .offset(y: -8)
+    }
+
+    private func chartSelectionGesture(width: CGFloat) -> some Gesture {
+        LongPressGesture(minimumDuration: 0.15)
+            .simultaneously(with: DragGesture(minimumDistance: 0))
+            .updating($pressedDayIndex) { value, pressedDayIndex, _ in
+                guard value.first == true, let drag = value.second, width > 0 else { return }
+                let relativeX = min(max(drag.location.x, 0), width)
+                let dayCount = viewModel.weeklySteps.count
+                let barsWidth = width - chartBarSpacing * CGFloat(dayCount - 1)
+                let dayStride = barsWidth / CGFloat(dayCount) + chartBarSpacing
+                pressedDayIndex = min(Int((relativeX + chartBarSpacing / 2) / dayStride), dayCount - 1)
+            }
     }
 
     private func fullDayName(_ index: Int) -> String {
