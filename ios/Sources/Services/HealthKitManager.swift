@@ -465,7 +465,8 @@ final class HealthKitManager: ObservableObject {
                 options: options,
                 anchorDate: start,
                 intervalComponents: interval
-            ) { _, collection, error in
+            )
+            query.initialResultsHandler = { _, collection, error in
                 if let error = error {
                     let nsError = error as NSError
                     if nsError.domain == HKError.errorDomain,
