@@ -14,7 +14,7 @@ const GEMINI_BASE_URL = Deno.env.get("GEMINI_BASE_URL") ?? "https://generativela
 const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash";
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": "app.nutricoach://",
   "Access-Control-Allow-Headers": "authorization, content-type, x-client-info, apikey",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };

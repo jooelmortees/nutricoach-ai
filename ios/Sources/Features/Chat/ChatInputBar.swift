@@ -23,7 +23,7 @@ struct ChatInputBar: View {
     /// Texto del campo (binding bidireccional con la vista padre).
     @Binding var text: String
     /// Placeholder del campo.
-    var placeholder: String = "Chatear con NutriCoach"
+    var placeholder: String = "Pregunta a NutriCoach"
     /// True cuando el agente está procesando (deshabilita el envío).
     var isAgentThinking: Bool = false
     /// True cuando hay audio grabándose (modo grabación activo).

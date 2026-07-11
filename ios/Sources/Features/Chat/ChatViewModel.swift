@@ -121,13 +121,13 @@ final class ChatViewModel: ObservableObject {
         // así que inyectamos un prompt descriptor según el tipo de contenido.
         if hasAttachments && !hasText && !hasAudio {
             displayText = "Que macros tiene esta comida?"
-            uiText = "📷 Imagen"
+            uiText = "Imagen adjunta"
         }
         if hasAudio && !hasText {
             displayText = hasAttachments
                 ? "Analiza esta imagen y escucha el audio del usuario."
                 : "Escucha este audio del usuario y responde."
-            uiText = hasAttachments ? "🎵 Audio + 📷 Imagen" : "🎵 Audio"
+            uiText = hasAttachments ? "Audio e imagen" : "Audio"
         }
         let toUpload = pendingAttachments
         for attachment in toUpload {
@@ -225,7 +225,7 @@ final class ChatViewModel: ObservableObject {
             let summary = formatMealSummary(kcal: kcal, protein: protein, carbs: carbs, fat: fat)
             messages.append(ChatMessage(
                 role: .assistant,
-                content: "🍽️ \(description)\n\(summary)\n\nRegistrada en tu pestaña Macros."
+                content: "[Comida guardada] \(description)\n\(summary)\n\nRegistrada en tu pestana Macros."
             ))
         case .error(let msg):
             errorMessage = msg
@@ -233,7 +233,7 @@ final class ChatViewModel: ObservableObject {
             if let idx = messages.indices.last, messages[idx].role == .assistant && messages[idx].isStreaming {
                 messages[idx].isStreaming = false
                 if messages[idx].content.isEmpty {
-                    messages[idx].content = "⚠️ \(msg)"
+                    messages[idx].content = "Error: \(msg)"
                 }
             }
         }

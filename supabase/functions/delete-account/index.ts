@@ -13,7 +13,7 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": "app.nutricoach://",
   "Access-Control-Allow-Headers": "authorization, content-type, x-client-info, apikey",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
@@ -81,21 +81,24 @@ serve(async (req) => {
       .delete()
       .eq("id", user.id);
 
-    // 5. Borrar objetos de Storage del usuario
-    try {
-      const { data: folders } = await supabaseAdmin
-        .storage
-        .from("meal-images")
-        .list(user.id, { limit: 100 });
-      if (folders && folders.length > 0) {
-        const filesToDelete = folders.map(f => `${user.id}/${f.name}`);
-        await supabaseAdmin
+    // 5. Borrar objetos de Storage del usuario (meal-photos y meal-videos)
+    const storageBuckets = ["meal-photos", "meal-videos"];
+    for (const bucket of storageBuckets) {
+      try {
+        const { data: folders } = await supabaseAdmin
           .storage
-          .from("meal-images")
-          .remove(filesToDelete);
+          .from(bucket)
+          .list(user.id, { limit: 100 });
+        if (folders && folders.length > 0) {
+          const filesToDelete = folders.map(f => `${user.id}/${f.name}`);
+          await supabaseAdmin
+            .storage
+            .from(bucket)
+            .remove(filesToDelete);
+        }
+      } catch (storageErr) {
+        errors.push(`${bucket}: ${String(storageErr)}`);
       }
-    } catch (storageErr) {
-      errors.push(`storage: ${String(storageErr)}`);
     }
 
     // 6. Borrar el usuario de auth.users (esto borra el perfil en cascade
