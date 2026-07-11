@@ -9,6 +9,7 @@ struct DashboardView: View {
     @EnvironmentObject var auth: AuthManager
     @StateObject private var viewModel = DashboardViewModel()
     @ObservedObject private var healthKit = HealthKitManager.shared
+    @State private var selectedDayIndex: Int?
 
     var body: some View {
         NavigationStack {
@@ -163,7 +164,7 @@ struct DashboardView: View {
                     .font(.headline)
                 Spacer()
             }
-            // Bar chart simple con 7 barras
+            // Bar chart simple con 7 barras clickeables
             HStack(alignment: .bottom, spacing: 6) {
                 ForEach(0..<7, id: \.self) { i in
                     let value = viewModel.weeklySteps[i]
@@ -178,12 +179,87 @@ struct DashboardView: View {
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        selectedDayIndex = i
+                    }
                 }
             }
             .frame(height: 110)
         }
         .padding()
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+        .sheet(item: Binding(
+            get: { selectedDayIndex.map { DayDetail(index: $0) } },
+            set: { selectedDayIndex = $0?.index }
+        )) { detail in
+            dayDetailSheet(for: detail.index)
+                .presentationDetents([.height(220)])
+                .presentationDragIndicator(.visible)
+        }
+    }
+
+    private func dayDetailSheet(for index: Int) -> some View {
+        let steps = viewModel.weeklySteps[index]
+        let kcal = viewModel.weeklyActiveEnergy[index]
+        let dayName = fullDayName(index)
+        let dateOffset = 6 - index
+        let calendar = Calendar.current
+        let date = calendar.date(byAdding: .day, value: -dateOffset, to: calendar.startOfDay(for: Date())) ?? Date()
+        let dateText = date.formatted(date: .abbreviated, time: .omitted)
+
+        return VStack(spacing: 16) {
+            VStack(spacing: 4) {
+                Text(dayName)
+                    .font(.title2.bold())
+                Text(dateText)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            HStack(spacing: 24) {
+                VStack(spacing: 8) {
+                    Image(systemName: "figure.walk")
+                        .font(.title2)
+                        .foregroundStyle(.green)
+                    Text("\(steps)")
+                        .font(.title.bold())
+                    Text("pasos")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(spacing: 8) {
+                    Image(systemName: "flame.fill")
+                        .font(.title2)
+                        .foregroundStyle(.orange)
+                    Text("\(kcal)")
+                        .font(.title.bold())
+                    Text("kcal quemadas")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+
+            Spacer()
+        }
+        .padding()
+    }
+
+    private func fullDayName(_ index: Int) -> String {
+        // index 0 = hace 6 dias, index 6 = hoy
+        let names = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let date = calendar.date(byAdding: .day, value: -(6 - index), to: today) ?? today
+        let weekday = calendar.component(.weekday, from: date)
+        // Calendar.component(.weekday): 1 = domingo, 2 = lunes, ...
+        let adjustedIndex = (weekday + 5) % 7  // 0 = lunes, 6 = domingo
+        return names[adjustedIndex]
     }
 
     private func metricCard(title: String, value: String, subtitle: String, icon: String, color: Color) -> some View {
@@ -216,8 +292,15 @@ struct DashboardView: View {
     }
 
     private func weekdayLabel(_ index: Int) -> String {
+        // index 0 = hace 6 dias, index 6 = hoy
         let labels = ["L", "M", "X", "J", "V", "S", "D"]
-        return labels[index]
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let date = calendar.date(byAdding: .day, value: -(6 - index), to: today) ?? today
+        let weekday = calendar.component(.weekday, from: date)
+        // Calendar.component(.weekday): 1 = domingo, 2 = lunes, ...
+        let adjustedIndex = (weekday + 5) % 7  // 0 = lunes, 6 = domingo
+        return labels[adjustedIndex]
     }
 }
 
@@ -228,6 +311,7 @@ final class DashboardViewModel: ObservableObject {
     @Published var restingHR: Double?
     @Published var sleepHours: Double?
     @Published var weeklySteps: [Int] = Array(repeating: 0, count: 7)
+    @Published var weeklyActiveEnergy: [Int] = Array(repeating: 0, count: 7)
     @Published var todaysKcal: Double = 0
     @Published var hasAuthorizedHealthKit = false
     @Published var isSyncing: Bool = false
@@ -300,8 +384,9 @@ final class DashboardViewModel: ObservableObject {
                 }
             }
 
-            // Llenar weeklySteps array (datos historicos de Supabase)
+            // Llenar weeklySteps array (datos historicos de Supabase como fallback)
             self.weeklySteps = (0..<7).map { Int(stepsByDay[$0] ?? 0) }
+            self.weeklyActiveEnergy = (0..<7).map { Int(energyByDay[$0] ?? 0) }
 
             // Lectura en vivo de HealthKit para "Hoy" (fuente primaria).
             // Evita el lag de red: syncToBackend puede tener throttling o haber
@@ -309,6 +394,27 @@ final class DashboardViewModel: ObservableObject {
             // tiene el valor mas fresco y exacto (incluye Huawei GT6 Pro via
             // Health app sync). Si falla, usamos Supabase como fallback.
             let hk = HealthKitManager.shared
+
+            // Lectura semanal completa de HealthKit: pasos + kcal por dia.
+            // HKStatisticsCollectionQuery obtiene los 7 dias en una sola query
+            // y deduplica fuentes (iPhone + Apple Watch). Si falla, mantenemos
+            // los datos de Supabase que ya cargamos arriba.
+            do {
+                let (hkSteps, hkEnergy) = try await hk.readWeeklyStepsAndEnergy()
+                // Solo sobreescribir si hay datos reales (evitar poner ceros
+                // si HealthKit no tiene nada para un dia)
+                for i in 0..<7 {
+                    if hkSteps[i] > 0 {
+                        self.weeklySteps[i] = Int(hkSteps[i])
+                    }
+                    if hkEnergy[i] > 0 {
+                        self.weeklyActiveEnergy[i] = Int(hkEnergy[i])
+                    }
+                }
+            } catch {
+                AppLogger.info("Dashboard: readWeeklyStepsAndEnergy fallo, uso fallback Supabase: \(error.localizedDescription)")
+            }
+
             do {
                 if let liveSteps = try await hk.readTodaySteps() {
                     self.steps = liveSteps
@@ -325,6 +431,7 @@ final class DashboardViewModel: ObservableObject {
             do {
                 if let liveEnergy = try await hk.readTodayActiveEnergy() {
                     self.activeEnergy = liveEnergy
+                    self.weeklyActiveEnergy[6] = Int(liveEnergy)
                 } else {
                     self.activeEnergy = energyByDay[6]
                 }
@@ -361,19 +468,39 @@ final class DashboardViewModel: ObservableObject {
             // El recorded_at que guardamos es medianoche del dia de startDate (anoche).
             // Para mostrar el sueño de "esta noche", buscamos el de hoy + ayer
             // (la noche que acaba de terminar o esta en curso).
-            // Sueño no tiene lectura en vivo simple (requiere agregar category samples),
-            // mantenemos Supabase.
             let yesterday = calendar.date(byAdding: .day, value: -1, to: now) ?? now
-            let sleepMinutesToday = metrics
+            let sleepMinutesSupabase = metrics
                 .filter { $0.type == "sleep_minutes" }
                 .filter { metric in
                     let date = DateParsing.parse(metric.recordedAt) ?? now
-                    // Matchea si el sueño corresponde a hoy o a ayer (anoche)
+                    // Matchea si el sueno corresponde a hoy o a ayer (anoche)
                     return calendar.isDate(date, inSameDayAs: now) ||
                            calendar.isDate(date, inSameDayAs: yesterday)
                 }
                 .reduce(0.0) { $0 + $1.value }
-            self.sleepHours = sleepMinutesToday / 60.0  // minutos a horas
+
+            // Intentar lectura directa de HealthKit para el sueno de anoche.
+            // querySleep ahora filtra solo fases asleep (excluye inBed y awake),
+            // asi que el valor es mas preciso. Si HealthKit tiene datos, usamos
+            // ese valor; si no, fallback a Supabase.
+            do {
+                let sleepStart = calendar.date(byAdding: .hour, value: -12, to: now) ?? now
+                let sleepSamples = try await hk.querySleepForLastNight(from: sleepStart, to: now)
+                if sleepSamples > 0 {
+                    self.sleepHours = sleepSamples / 60.0
+                } else if sleepMinutesSupabase > 0 {
+                    self.sleepHours = sleepMinutesSupabase / 60.0
+                } else {
+                    self.sleepHours = nil
+                }
+            } catch {
+                AppLogger.info("Dashboard: querySleepForLastNight fallo, uso Supabase: \(error.localizedDescription)")
+                if sleepMinutesSupabase > 0 {
+                    self.sleepHours = sleepMinutesSupabase / 60.0
+                } else {
+                    self.sleepHours = nil
+                }
+            }
         } catch is CancellationError {
             // No es un error: la view se fue antes de terminar (cambio de tab).
             // No mostramos mensaje.
@@ -403,4 +530,9 @@ final class DashboardViewModel: ObservableObject {
             // Silencioso
         }
     }
+}
+
+private struct DayDetail: Identifiable {
+    let index: Int
+    var id: Int { index }
 }

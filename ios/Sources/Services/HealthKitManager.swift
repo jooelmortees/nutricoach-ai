@@ -371,6 +371,133 @@ final class HealthKitManager: ObservableObject {
         try await readTodayValue(id: .activeEnergyBurned, strategy: .sum)
     }
 
+    /// Lee el sueno de la ultima noche directamente de HealthKit.
+    /// Devuelve minutos totales de sueno real (excluyendo inBed y awake).
+    /// Ventana: desde hace 12 horas hasta ahora (cubre una noche tipica).
+    /// Usa el mismo filtro que querySleep: solo allAsleepValues.
+    func querySleepForLastNight(from start: Date, to end: Date) async throws -> Double {
+        guard let type = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else { return 0 }
+
+        let dateRangePredicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        let asleepPredicate = HKCategoryValueSleepAnalysis.predicateForSamples(equalTo: HKCategoryValueSleepAnalysis.allAsleepValues)
+        let compoundPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [dateRangePredicate, asleepPredicate])
+
+        let samples: [HKCategorySample] = try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: type,
+                predicate: compoundPredicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, samples, error in
+                if let error = error {
+                    let nsError = error as NSError
+                    if nsError.domain == HKError.errorDomain,
+                       nsError.code == HKError.Code.errorNoData.rawValue {
+                        continuation.resume(returning: [])
+                    } else {
+                        continuation.resume(throwing: error)
+                    }
+                    return
+                }
+                continuation.resume(returning: (samples as? [HKCategorySample]) ?? [])
+            }
+            store.execute(query)
+        }
+
+        var total: TimeInterval = 0
+        for sample in samples {
+            total += sample.endDate.timeIntervalSince(sample.startDate)
+        }
+        return Double(Int(total / 60))  // minutos
+    }
+
+    /// Lee pasos Y calorias activas de los ultimos 7 dias directamente de HealthKit.
+    /// Devuelve dos arrays de 7 elementos (index 0 = hace 6 dias, index 6 = hoy).
+    /// Usa HKStatisticsCollectionQuery para obtener un valor agregado por dia
+    /// en una sola query (mas eficiente que 7 queries separadas).
+    /// Deduplica fuentes (iPhone + Apple Watch) automaticamente.
+    func readWeeklyStepsAndEnergy() async throws -> (steps: [Double], energy: [Double]) {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        guard let weekAgo = calendar.date(byAdding: .day, value: -6, to: today) else {
+            return (Array(repeating: 0, count: 7), Array(repeating: 0, count: 7))
+        }
+        let interval = DateComponents(day: 1)
+
+        let steps = try await fetchCollection(
+            id: .stepCount,
+            unit: .count(),
+            from: weekAgo,
+            to: today,
+            interval: interval,
+            options: .cumulativeSum
+        )
+        let energy = try await fetchCollection(
+            id: .activeEnergyBurned,
+            unit: .kilocalorie(),
+            from: weekAgo,
+            to: today,
+            interval: interval,
+            options: .cumulativeSum
+        )
+
+        return (steps, energy)
+    }
+
+    /// Helper: ejecuta HKStatisticsCollectionQuery y devuelve un array de 7
+    /// valores (index 0 = hace 6 dias, index 6 = hoy).
+    private func fetchCollection(
+        id: HKQuantityTypeIdentifier,
+        unit: HKUnit,
+        from start: Date,
+        to end: Date,
+        interval: DateComponents,
+        options: HKStatisticsOptions
+    ) async throws -> [Double] {
+        guard let type = HKQuantityType.quantityType(forIdentifier: id) else {
+            return Array(repeating: 0, count: 7)
+        }
+
+        let collection: HKStatisticsCollection? = try await withCheckedThrowingContinuation { continuation in
+            let query = HKStatisticsCollectionQuery(
+                quantityType: type,
+                quantitySamplePredicate: nil,
+                options: options,
+                anchorDate: start,
+                intervalComponents: interval
+            ) { _, collection, error in
+                if let error = error {
+                    let nsError = error as NSError
+                    if nsError.domain == HKError.errorDomain,
+                       nsError.code == HKError.Code.errorNoData.rawValue {
+                        continuation.resume(returning: nil)
+                    } else {
+                        continuation.resume(throwing: error)
+                    }
+                    return
+                }
+                continuation.resume(returning: collection)
+            }
+            store.execute(query)
+        }
+
+        guard let collection else { return Array(repeating: 0, count: 7) }
+
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        var values = Array(repeating: 0.0, count: 7)
+
+        // Iterar los 7 dias. Para cada dia, obtenemos el statistics y su suma.
+        for dayOffset in 0..<7 {
+            let day = calendar.date(byAdding: .day, value: -(6 - dayOffset), to: today) ?? today
+            let stats = collection.statistics(for: day)
+            let quantity = stats?.sumQuantity()
+            values[dayOffset] = quantity?.doubleValue(for: unit) ?? 0
+        }
+
+        return values
+    }
+
     /// FC reposo de hoy (ultimo valor disponible).
     func readTodayRestingHeartRate() async throws -> Double? {
         try await readTodayValue(id: .restingHeartRate, strategy: .last)
@@ -548,12 +675,21 @@ final class HealthKitManager: ObservableObject {
 
         while current <= endDay {
             let dayEnd = calendar.date(byAdding: .day, value: 1, to: current) ?? current
-            let predicate = HKQuery.predicateForSamples(withStart: current, end: dayEnd, options: .strictStartDate)
+            let dateRangePredicate = HKQuery.predicateForSamples(withStart: current, end: dayEnd, options: .strictStartDate)
+
+            // Filtrar solo fases de sueno real (excluir inBed y awake).
+            // HKCategoryValueSleepAnalysis.allAsleepValues incluye:
+            //   .asleepUnspecified, .asleepCore, .asleepDeep, .asleepREM
+            // Excluye .inBed (tiempo en la cama sin dormir) y .awake (despierto).
+            // Sin este filtro, el total incluia el tiempo en la cama antes de
+            // dormirse, inflando el resultado (ej: 8h en cama != 7h durmiendo).
+            let asleepPredicate = HKCategoryValueSleepAnalysis.predicateForSamples(equalTo: HKCategoryValueSleepAnalysis.allAsleepValues)
+            let compoundPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [dateRangePredicate, asleepPredicate])
 
             let daySamples: [HKCategorySample] = try await withCheckedThrowingContinuation { continuation in
                 let query = HKSampleQuery(
                     sampleType: type,
-                    predicate: predicate,
+                    predicate: compoundPredicate,
                     limit: HKObjectQueryNoLimit,
                     sortDescriptors: nil
                 ) { _, samples, error in
@@ -572,6 +708,11 @@ final class HealthKitManager: ObservableObject {
                 store.execute(query)
             }
 
+            // Los samples ya estan filtrados por el predicate a solo fases asleep.
+            // Sumamos las duraciones. Si hay solapamiento entre fases (raro pero
+            // posible si el Watch registra core y deep simultaneamente), la suma
+            // puede ser ligeramente mayor al tiempo real en la cama. Aceptable
+            // para mostrar horas de sueno total.
             var total: TimeInterval = 0
             for sample in daySamples {
                 total += sample.endDate.timeIntervalSince(sample.startDate)
