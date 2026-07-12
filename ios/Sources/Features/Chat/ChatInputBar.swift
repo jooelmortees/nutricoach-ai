@@ -70,7 +70,6 @@ struct ChatInputBar: View {
         .padding(.top, 6)
         .padding(.bottom, 6)
         .animation(.easeOut(duration: 0.22), value: isRecordingAudio)
-        .animation(.easeInOut(duration: 0.2), value: isAgentThinking)
         .animation(.easeInOut(duration: 0.2), value: recorder.recordedAudio != nil)
     }
 

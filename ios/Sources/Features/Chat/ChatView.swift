@@ -26,8 +26,9 @@ struct ChatView: View {
     @State private var showCamera: Bool = false
     @State private var showFullGallery: Bool = false
     @State private var isPinnedToBottom = true
+    @State private var shouldFollowResponse = true
     @State private var isUserScrolling = false
-    @State private var bottomDistance: CGFloat = 0
+    @State private var bottomDistance = CGFloat.greatestFiniteMagnitude
     @State private var scrollToBottomRequest = 0
     @State private var recordingTask: Task<Void, Never>?
 
@@ -40,6 +41,7 @@ struct ChatView: View {
                     messagesList
                     inputBar
                 }
+                .background(Color(.systemBackground))
 
                 // Overlay del bottom sheet del botón "+"
                 if showPlusMenu {
@@ -248,20 +250,22 @@ struct ChatView: View {
                     .coordinateSpace(name: "chat-scroll")
                     .simultaneousGesture(
                         DragGesture(minimumDistance: 4)
-                            .onChanged { value in
+                            .onChanged { _ in
                                 isUserScrolling = true
-                                if value.translation.height > 8 {
-                                    isPinnedToBottom = false
-                                }
+                                shouldFollowResponse = false
                             }
                             .onEnded { _ in
                                 isUserScrolling = false
-                                updatePinnedState(viewportHeight: viewport.size.height)
+                                updatePinnedState()
+                                if !viewModel.isAgentThinking && isPinnedToBottom {
+                                    shouldFollowResponse = true
+                                }
                             }
                     )
 
-                    if !isPinnedToBottom {
+                    if !shouldFollowResponse || !isPinnedToBottom {
                         Button {
+                            shouldFollowResponse = true
                             isPinnedToBottom = true
                             withAnimation(.easeOut(duration: 0.2)) {
                                 proxy.scrollTo(bottomAnchorId, anchor: .bottom)
@@ -280,23 +284,24 @@ struct ChatView: View {
                 }
                 .onPreferenceChange(ChatBottomPositionPreferenceKey.self) { bottomY in
                     bottomDistance = bottomY - viewport.size.height
-                    updatePinnedState(viewportHeight: viewport.size.height)
+                    updatePinnedState()
                 }
                 .onChange(of: scrollToBottomRequest) { _, _ in
+                    shouldFollowResponse = true
                     isPinnedToBottom = true
                     DispatchQueue.main.async {
                         proxy.scrollTo(bottomAnchorId, anchor: .bottom)
                     }
                 }
                 .onChange(of: viewModel.messages.last?.id) { _, _ in
-                    guard isPinnedToBottom else { return }
+                    guard shouldFollowResponse else { return }
                     DispatchQueue.main.async {
                         proxy.scrollTo(bottomAnchorId, anchor: .bottom)
                     }
                 }
                 .task(id: viewModel.isAgentThinking) {
                     while viewModel.isAgentThinking && !Task.isCancelled {
-                        if isPinnedToBottom && !isUserScrolling {
+                        if shouldFollowResponse && !isUserScrolling {
                             proxy.scrollTo(bottomAnchorId, anchor: .bottom)
                         }
                         try? await Task.sleep(nanoseconds: 90_000_000)
@@ -384,9 +389,8 @@ struct ChatView: View {
                 isFocused: $inputFocused
             )
         }
-        .background(Color(red: 0.10, green: 0.10, blue: 0.10))
+        .background(.bar)
         .animation(.easeInOut(duration: 0.2), value: viewModel.pendingAttachments.count)
-        .animation(.easeInOut(duration: 0.2), value: viewModel.isAgentThinking)
         .animation(.easeInOut(duration: 0.2), value: audioRecorder.isRecording)
         .animation(.easeInOut(duration: 0.2), value: audioRecorder.recordedAudio != nil)
     }
@@ -497,13 +501,8 @@ struct ChatView: View {
         scrollToBottomRequest += 1
     }
 
-    private func updatePinnedState(viewportHeight: CGFloat) {
-        guard viewportHeight > 0 else { return }
-        if bottomDistance <= 72 {
-            isPinnedToBottom = true
-        } else if isUserScrolling {
-            isPinnedToBottom = false
-        }
+    private func updatePinnedState() {
+        isPinnedToBottom = bottomDistance <= 72
     }
 
     private func loadOlderMessages(using proxy: ScrollViewProxy) {
@@ -517,7 +516,7 @@ struct ChatView: View {
 }
 
 private struct ChatBottomPositionPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static var defaultValue = CGFloat.greatestFiniteMagnitude
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }
