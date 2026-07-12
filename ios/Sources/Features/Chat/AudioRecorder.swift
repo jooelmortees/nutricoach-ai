@@ -17,10 +17,25 @@ import Foundation
 import AVFoundation
 import SwiftUI
 
+struct RecordedAudio: Identifiable, Equatable {
+    let id: UUID
+    let fileURL: URL
+    let duration: TimeInterval
+    let sizeBytes: Int
+
+    init(id: UUID = UUID(), fileURL: URL, duration: TimeInterval, sizeBytes: Int) {
+        self.id = id
+        self.fileURL = fileURL
+        self.duration = duration
+        self.sizeBytes = sizeBytes
+    }
+}
+
 @MainActor
-final class AudioRecorder: ObservableObject {
+final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     @Published var isRecording = false
-    @Published var audioData: Data?
+    @Published var isRequestingPermission = false
+    @Published var recordedAudio: RecordedAudio?
     @Published var errorMessage: String?
     /// Nivel suavizado 0...1 para la waveform (suavizado exponencial).
     @Published var smoothedLevel: CGFloat = 0
@@ -36,12 +51,21 @@ final class AudioRecorder: ObservableObject {
     private var meteringTimer: Timer?
     private var elapsedTimer: Timer?
 
-    func startRecording() {
+    func startRecording() async {
+        guard !isRecording, !isRequestingPermission else { return }
+        isRequestingPermission = true
+        defer { isRequestingPermission = false }
         errorMessage = nil
-        audioData = nil
+        discardRecordedAudio()
         smoothedLevel = 0
         barJitters = Array(repeating: 0, count: 28)
         elapsedSeconds = 0
+
+        guard await requestRecordPermission() else {
+            errorMessage = "NutriCoach necesita permiso para usar el micrófono. Actívalo en Ajustes."
+            return
+        }
+        guard !Task.isCancelled else { return }
 
         let session = AVAudioSession.sharedInstance()
         do {
@@ -70,53 +94,91 @@ final class AudioRecorder: ObservableObject {
 
         do {
             recorder = try AVAudioRecorder(url: filename, settings: settings)
+            recorder?.delegate = self
             recorder?.isMeteringEnabled = true
-            recorder?.record()
+            guard recorder?.record(forDuration: Self.maxDurationSeconds) == true else {
+                throw AudioRecorderError.couldNotStart
+            }
             isRecording = true
             startMeteringTimers()
         } catch {
             errorMessage = "No se pudo grabar: \(error.localizedDescription)"
+            recorder?.stop()
+            recorder = nil
+            if let audioURL {
+                try? FileManager.default.removeItem(at: audioURL)
+            }
+            audioURL = nil
+            stopMeteringTimers()
+            deactivateAudioSession()
         }
     }
 
-    /// Detiene la grabacion y lee el audio del disco.
-    /// CRITICO: es async porque AVAudioRecorder.stop() es asincrono:
-    /// el archivo WAV no esta garantizado de estar flushed en disco
-    /// inmediatamente despues de stop(). Si leemos con
-    /// Data(contentsOf:) justo despues, podemos obtener un archivo
-    /// incompleto o vacio -> Gemini no recibe audio valido.
-    /// Esperamos 100ms (suficiente para PCM lineal) antes de leer.
+    /// Detiene la grabacion y conserva el WAV temporal hasta que el envio termine.
     func stopRecording() async {
+        let duration = recorder?.currentTime ?? elapsedSeconds
         recorder?.stop()
+        recorder = nil
         isRecording = false
         stopMeteringTimers()
 
         guard let url = audioURL else { return }
 
         do {
-            // Pequeno retardo para asegurar que AVAudioRecorder ha
-            // hecho flush del archivo WAV a disco.
             try await Task.sleep(nanoseconds: 100_000_000)  // 100ms
-            audioData = try Data(contentsOf: url)
-            try? FileManager.default.removeItem(at: url)
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let sizeBytes = (attributes[.size] as? NSNumber)?.intValue ?? 0
+            guard sizeBytes > 44 else {
+                throw AudioRecorderError.emptyRecording
+            }
+            recordedAudio = RecordedAudio(
+                fileURL: url,
+                duration: duration,
+                sizeBytes: sizeBytes
+            )
         } catch {
             errorMessage = "No se pudo leer el audio: \(error.localizedDescription)"
+            try? FileManager.default.removeItem(at: url)
         }
         audioURL = nil
+        deactivateAudioSession()
     }
 
     func cancelRecording() {
         recorder?.stop()
+        recorder = nil
         isRecording = false
         stopMeteringTimers()
         if let url = audioURL {
             try? FileManager.default.removeItem(at: url)
         }
         audioURL = nil
-        audioData = nil
+        discardRecordedAudio()
         smoothedLevel = 0
         barJitters = Array(repeating: 0, count: 28)
         elapsedSeconds = 0
+        deactivateAudioSession()
+    }
+
+    func discardRecordedAudio() {
+        if let url = recordedAudio?.fileURL {
+            try? FileManager.default.removeItem(at: url)
+        }
+        recordedAudio = nil
+    }
+
+    nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if flag {
+                if self.isRecording {
+                    await self.stopRecording()
+                }
+            } else {
+                self.errorMessage = "La grabación se interrumpió antes de terminar."
+                self.cancelRecording()
+            }
+        }
     }
 
     /// Nivel de audio instantáneo normalizado a 0...1.
@@ -174,5 +236,33 @@ final class AudioRecorder: ObservableObject {
         meteringTimer = nil
         elapsedTimer?.invalidate()
         elapsedTimer = nil
+    }
+
+    private func requestRecordPermission() async -> Bool {
+        await withCheckedContinuation { continuation in
+            AVAudioApplication.requestRecordPermission { granted in
+                continuation.resume(returning: granted)
+            }
+        }
+    }
+
+    private func deactivateAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            AppLogger.warning("No se pudo desactivar la sesión de audio: \(error.localizedDescription)")
+        }
+    }
+}
+
+private enum AudioRecorderError: LocalizedError {
+    case couldNotStart
+    case emptyRecording
+
+    var errorDescription: String? {
+        switch self {
+        case .couldNotStart: return "El micrófono no pudo iniciar la grabación."
+        case .emptyRecording: return "La grabación está vacía."
+        }
     }
 }

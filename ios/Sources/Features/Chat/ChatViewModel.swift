@@ -12,44 +12,92 @@ import UIKit
 final class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var isAgentThinking: Bool = false
+    @Published var isSending: Bool = false
     @Published var currentConversationId: String?
     @Published var errorMessage: String?
     /// Lista de imagenes pendientes de enviar (aun no subidas a Storage).
     @Published var pendingAttachments: [PendingAttachment] = []
+    @Published private(set) var hasMoreHistory = false
+    @Published private(set) var isLoadingOlderMessages = false
 
     private let agent = AgentService.shared
+    private let historyPageSize = 50
+    private var oldestMessageCreatedAt: String?
+    private var oldestMessageId: String?
+    private var hasLoadedConversation = false
+    private var streamTask: Task<Void, Never>?
+    private var conversationGeneration = 0
 
     func loadOrCreateConversation() async {
+        guard !hasLoadedConversation else { return }
+        let generation = conversationGeneration
         do {
             if currentConversationId == nil {
                 let id = try await agent.loadOrCreateLatestConversation()
+                guard conversationGeneration == generation else { return }
                 currentConversationId = id
             }
             if let convId = currentConversationId {
-                let history = try await agent.loadHistory(conversationId: convId)
-                messages = history.map { h in
-                    ChatMessage(
-                        id: UUID(uuidString: h.id) ?? UUID(),
-                        role: h.role,
-                        content: h.content,
-                        thinking: h.thinking,
-                        attachments: h.attachments,
-                        isStreaming: false
-                    )
-                }
+                let history = try await agent.loadHistory(
+                    conversationId: convId,
+                    limit: historyPageSize
+                )
+                guard conversationGeneration == generation, currentConversationId == convId else { return }
+                let loadedMessages = await makeChatMessages(from: history)
+                guard conversationGeneration == generation, currentConversationId == convId else { return }
+                messages = loadedMessages
+                oldestMessageCreatedAt = history.first?.createdAt
+                oldestMessageId = history.first?.id
+                hasMoreHistory = history.count == historyPageSize
             }
+            hasLoadedConversation = true
         } catch {
             errorMessage = "No se pudo cargar historial: \(error.localizedDescription)"
         }
     }
 
+    func loadOlderMessages() async {
+        guard !isLoadingOlderMessages,
+              hasMoreHistory,
+              let convId = currentConversationId,
+              let oldestMessageCreatedAt,
+              let oldestMessageId else { return }
+
+        isLoadingOlderMessages = true
+        let generation = conversationGeneration
+        defer { isLoadingOlderMessages = false }
+        do {
+            let history = try await agent.loadHistory(
+                conversationId: convId,
+                before: oldestMessageCreatedAt,
+                beforeId: oldestMessageId,
+                limit: historyPageSize
+            )
+            let olderMessages = await makeChatMessages(from: history)
+            guard conversationGeneration == generation, currentConversationId == convId else { return }
+            let existingIds = Set(messages.map(\.id))
+            messages.insert(contentsOf: olderMessages.filter { !existingIds.contains($0.id) }, at: 0)
+            self.oldestMessageCreatedAt = history.first?.createdAt ?? oldestMessageCreatedAt
+            self.oldestMessageId = history.first?.id ?? oldestMessageId
+            hasMoreHistory = history.count == historyPageSize
+        } catch {
+            errorMessage = "No se pudieron cargar mensajes anteriores: \(error.localizedDescription)"
+        }
+    }
+
     func newConversation() async {
+        conversationGeneration += 1
+        cancelActiveStream()
         do {
             let id = try await agent.createConversation()
             currentConversationId = id
             messages = []
             errorMessage = nil
             pendingAttachments = []
+            oldestMessageCreatedAt = nil
+            oldestMessageId = nil
+            hasMoreHistory = false
+            hasLoadedConversation = true
         } catch {
             errorMessage = "No se pudo crear conversación: \(error.localizedDescription)"
         }
@@ -57,18 +105,41 @@ final class ChatViewModel: ObservableObject {
 
     /// Limpia la conversacion actual: borra todos los mensajes y adjuntos pendientes.
     func clearConversation() {
+        conversationGeneration += 1
+        cancelActiveStream()
         messages = []
         errorMessage = nil
         pendingAttachments = []
+        oldestMessageCreatedAt = nil
+        oldestMessageId = nil
+        hasMoreHistory = false
     }
 
     /// Regenera la ultima respuesta del asistente. Toma el ultimo mensaje del
     /// usuario, lo reenvia, y reemplaza la respuesta del asistente.
     func regenerateLastResponse() async {
         guard currentConversationId != nil else { return }
+        cancelActiveStream()
         // Buscar el ultimo user message
         guard let lastUserIdx = messages.lastIndex(where: { $0.role == .user }) else { return }
         let lastUser = messages[lastUserIdx]
+        let resendAttachments = lastUser.attachments?
+            .filter { $0.bucket != nil && $0.path != nil }
+            .map(\.agentAttachment) ?? []
+        guard !lastUser.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !resendAttachments.isEmpty else {
+            errorMessage = "No se puede regenerar un audio antiguo sin volver a grabarlo."
+            return
+        }
+        let responseIds = messages.suffix(from: lastUserIdx + 1)
+            .filter { $0.role == .assistant }
+            .map(\.id)
+        do {
+            try await agent.deleteMessages(ids: responseIds)
+        } catch {
+            errorMessage = "No se pudo regenerar la respuesta: \(error.localizedDescription)"
+            return
+        }
         // Eliminar todos los mensajes posteriores al user (assistant + posteriores)
         let newMessages = Array(messages.prefix(lastUserIdx + 1))
         messages = newMessages
@@ -76,16 +147,14 @@ final class ChatViewModel: ObservableObject {
         isAgentThinking = true
         let assistantMsg = ChatMessage(role: .assistant, content: "", isStreaming: true)
         messages.append(assistantMsg)
-        await agent.sendMessage(
+        startStream(
             conversationId: currentConversationId!,
+            clientMessageId: lastUser.id,
             message: lastUser.content,
-            attachments: []
-        ) { [weak self] event in
-            Task { @MainActor in
-                guard let self else { return }
-                self.handle(event: event)
-            }
-        }
+            attachments: resendAttachments,
+            assistantMessageId: assistantMsg.id,
+            webSearch: false
+        )
     }
 
     /// Quita una imagen pendiente por su id (boton X del preview).
@@ -100,126 +169,122 @@ final class ChatViewModel: ObservableObject {
 
     /// Envia un mensaje al agente. Sube imagenes, adjunta audio si hay,
     /// y limpia el estado de preview.
-    func send(text: String, audioData: Data? = nil, webSearch: Bool = false) async {
+    @discardableResult
+    func send(text: String, recordedAudio: RecordedAudio? = nil, webSearch: Bool = false) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasText = !trimmed.isEmpty
         let hasAttachments = !pendingAttachments.isEmpty
-        let hasAudio = audioData != nil
-        guard hasText || hasAttachments || hasAudio else { return }
+        let hasAudio = recordedAudio != nil
+        guard hasText || hasAttachments || hasAudio else { return false }
+        guard pendingAttachments.count + (hasAudio ? 1 : 0) <= 8 else {
+            errorMessage = "Puedes enviar hasta ocho adjuntos, incluido el audio."
+            return false
+        }
+        guard !isSending, !isAgentThinking else { return false }
         guard let convId = currentConversationId else {
             errorMessage = "No hay conversacion activa."
-            return
+            return false
         }
 
-        // 1. Subir imagenes pendientes
+        isSending = true
+        errorMessage = nil
+        defer { isSending = false }
+
         var displayAttachments: [MessageAttachment] = []
         var agentAttachments: [AgentAttachment] = []
-        var displayText = trimmed
-        // Texto que se muestra en la burbuja del usuario (diferente del que va al backend).
-        var uiText = trimmed
-        // Fallbacks cuando no hay texto: el backend exige message no vacío,
-        // así que inyectamos un prompt descriptor según el tipo de contenido.
-        if hasAttachments && !hasText && !hasAudio {
-            displayText = "Que macros tiene esta comida?"
-            uiText = "Imagen adjunta"
-        }
-        if hasAudio && !hasText {
-            displayText = hasAttachments
-                ? "Analiza esta imagen y escucha el audio del usuario."
-                : "Escucha este audio del usuario y responde."
-            uiText = hasAttachments ? "Audio e imagen" : "Audio"
-        }
         let toUpload = pendingAttachments
         for attachment in toUpload {
             do {
-                let url = try await StorageService.shared.uploadMealImage(data: attachment.imageData)
-                displayAttachments.append(MessageAttachment(type: "image", url: url))
-                agentAttachments.append(AgentAttachment(type: "image", url: url))
+                let uploaded = try await StorageService.shared.uploadChatImage(
+                    data: attachment.imageData,
+                    conversationId: convId
+                )
+                displayAttachments.append(uploaded)
+                agentAttachments.append(uploaded.agentAttachment)
             } catch {
+                await StorageService.shared.deleteChatAttachments(displayAttachments)
                 errorMessage = "Error con la imagen: \(error.localizedDescription)"
-                return
+                return false
             }
         }
 
-        // 2. Adjuntar audio como base64 (WAV para máxima compatibilidad con Gemini)
-        if let audio = audioData {
-            let base64 = audio.base64EncodedString()
-            agentAttachments.append(AgentAttachment(type: "audio", data: base64, mime_type: "audio/wav"))
+        if let recordedAudio {
+            do {
+                let uploaded = try await StorageService.shared.uploadChatAudio(
+                    recordedAudio,
+                    conversationId: convId
+                )
+                displayAttachments.append(uploaded)
+                agentAttachments.append(uploaded.agentAttachment)
+            } catch {
+                await StorageService.shared.deleteChatAttachments(displayAttachments)
+                errorMessage = "Error con el audio: \(error.localizedDescription)"
+                return false
+            }
         }
 
-        // 3. Limpiar adjuntos pendientes
+        guard currentConversationId == convId else {
+            await StorageService.shared.deleteChatAttachments(displayAttachments)
+            return false
+        }
         pendingAttachments = []
 
-        // 4. Añadir mensaje del usuario a la UI
         let userMsg = ChatMessage(
             role: .user,
-            content: uiText.isEmpty ? "[Audio]" : uiText,
+            content: trimmed,
             attachments: displayAttachments
         )
         messages.append(userMsg)
         isAgentThinking = true
         errorMessage = nil
 
-        // 5. Crear placeholder del asistente
         let assistantMsg = ChatMessage(role: .assistant, content: "", isStreaming: true)
         messages.append(assistantMsg)
 
-        // 6. Enviar al agente
-        await agent.sendMessage(
+        startStream(
             conversationId: convId,
-            message: displayText,
-            attachments: agentAttachments
-        ) { [weak self] event in
-            Task { @MainActor in
-                guard let self else { return }
-                self.handle(event: event)
-            }
-        }
+            clientMessageId: userMsg.id,
+            message: trimmed,
+            attachments: agentAttachments,
+            assistantMessageId: assistantMsg.id,
+            webSearch: webSearch
+        )
+        return true
     }
 
-    private func handle(event: AgentEvent) {
+    private func handle(event: AgentEvent, assistantMessageId: UUID, conversationId: String) {
+        guard currentConversationId == conversationId,
+              let idx = messages.firstIndex(where: { $0.id == assistantMessageId }) else { return }
         switch event {
         case .thinkingDelta(let text):
-            if let idx = messages.indices.last {
-                messages[idx].thinking = (messages[idx].thinking ?? "") + text
-            }
+            messages[idx].thinking = (messages[idx].thinking ?? "") + text
         case .textDelta(let text):
-            if let idx = messages.indices.last {
-                messages[idx].content += text
-            }
+            messages[idx].content += text
         case .blockStart, .blockStop:
             break
         case .toolsStart(let names):
             // El agente empieza a usar tools. Mostrar indicador en el mensaje.
-            if let idx = messages.indices.last {
-                var statusList: [ToolStatus] = []
-                for name in names {
-                    statusList.append(ToolStatus(name: name, summary: "", isRunning: true))
-                }
-                messages[idx].toolStatus = statusList
+            var statusList: [ToolStatus] = []
+            for name in names {
+                statusList.append(ToolStatus(name: name, summary: "", isRunning: true))
             }
+            messages[idx].toolStatus = statusList
         case .toolDone(let name, let summary):
             // Marcar el tool como completado y actualizar el summary
-            if let idx = messages.indices.last {
-                if var tools = messages[idx].toolStatus {
-                    if let toolIdx = tools.firstIndex(where: { $0.name == name }) {
-                        tools[toolIdx].isRunning = false
-                        if !summary.isEmpty {
-                            tools[toolIdx].summary = summary
-                        }
-                    } else {
-                        // Tool no estaba en la lista, lo añadimos como completado
-                        tools.append(ToolStatus(name: name, summary: summary, isRunning: false))
+            if var tools = messages[idx].toolStatus {
+                if let toolIdx = tools.firstIndex(where: { $0.name == name }) {
+                    tools[toolIdx].isRunning = false
+                    if !summary.isEmpty {
+                        tools[toolIdx].summary = summary
                     }
-                    messages[idx].toolStatus = tools
+                } else {
+                    tools.append(ToolStatus(name: name, summary: summary, isRunning: false))
                 }
+                messages[idx].toolStatus = tools
             }
         case .done:
-            if let idx = messages.indices.last {
-                messages[idx].isStreaming = false
-                // Limpiar el estado de tools al terminar
-                messages[idx].toolStatus = nil
-            }
+            messages[idx].isStreaming = false
+            messages[idx].toolStatus = nil
             isAgentThinking = false
         case .mealSaved(let kcal, let protein, let carbs, let fat, let description):
             let summary = formatMealSummary(kcal: kcal, protein: protein, carbs: carbs, fat: fat)
@@ -230,7 +295,7 @@ final class ChatViewModel: ObservableObject {
         case .error(let msg):
             errorMessage = msg
             isAgentThinking = false
-            if let idx = messages.indices.last, messages[idx].role == .assistant && messages[idx].isStreaming {
+            if messages[idx].role == .assistant && messages[idx].isStreaming {
                 messages[idx].isStreaming = false
                 if messages[idx].content.isEmpty {
                     messages[idx].content = "Error: \(msg)"
@@ -239,10 +304,67 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    private func startStream(
+        conversationId: String,
+        clientMessageId: UUID,
+        message: String,
+        attachments: [AgentAttachment],
+        assistantMessageId: UUID,
+        webSearch: Bool
+    ) {
+        streamTask?.cancel()
+        streamTask = Task { [weak self] in
+            guard let self else { return }
+            await self.agent.sendMessage(
+                conversationId: conversationId,
+                clientMessageId: clientMessageId,
+                assistantMessageId: assistantMessageId,
+                message: message,
+                attachments: attachments,
+                webSearch: webSearch
+            ) { [weak self] event in
+                guard let self else { return }
+                self.handle(
+                    event: event,
+                    assistantMessageId: assistantMessageId,
+                    conversationId: conversationId
+                )
+            }
+        }
+    }
+
+    private func cancelActiveStream() {
+        streamTask?.cancel()
+        streamTask = nil
+        isAgentThinking = false
+        isSending = false
+    }
+
+    private func makeChatMessages(from history: [HistoryMessage]) async -> [ChatMessage] {
+        var result: [ChatMessage] = []
+        result.reserveCapacity(history.count)
+        for item in history {
+            let attachments = await StorageService.shared.refreshAccessURLs(in: item.attachments)
+            result.append(ChatMessage(
+                id: UUID(uuidString: item.id) ?? UUID(),
+                role: item.role,
+                content: item.content,
+                thinking: item.thinking,
+                attachments: attachments,
+                isStreaming: false
+            ))
+        }
+        return result
+    }
+
     /// El usuario seleccionó N imagenes del PhotosPicker. Las añadimos al
     /// preview sin subirlas todavia (se subiran al enviar).
     func handlePickedImages(_ items: [PhotosPickerItem]) async {
-        for item in items {
+        let availableSlots = max(8 - pendingAttachments.count, 0)
+        if items.count > availableSlots {
+            errorMessage = "Puedes adjuntar hasta ocho archivos."
+        }
+        for item in items.prefix(availableSlots) {
             do {
                 guard let data = try await item.loadTransferable(type: Data.self) else { continue }
                 let compressed = compressImage(data: data, maxBytes: 2 * 1024 * 1024)
@@ -371,16 +493,42 @@ struct PendingAttachment: Identifiable, Equatable {
 struct MessageAttachment: Identifiable, Equatable, Codable {
     let id: UUID
     let type: String
-    let url: String
+    let bucket: String?
+    let path: String?
+    var url: String?
+    let mimeType: String?
+    let name: String?
+    let sizeBytes: Int?
+    let durationSeconds: Double?
+    let legacyData: String?
 
-    init(id: UUID = UUID(), type: String, url: String) {
+    init(
+        id: UUID = UUID(),
+        type: String,
+        bucket: String? = nil,
+        path: String? = nil,
+        url: String? = nil,
+        mimeType: String? = nil,
+        name: String? = nil,
+        sizeBytes: Int? = nil,
+        durationSeconds: Double? = nil,
+        legacyData: String? = nil
+    ) {
         self.id = id
         self.type = type
+        self.bucket = bucket
+        self.path = path
         self.url = url
+        self.mimeType = mimeType
+        self.name = name
+        self.sizeBytes = sizeBytes
+        self.durationSeconds = durationSeconds
+        self.legacyData = legacyData
     }
 
     enum CodingKeys: String, CodingKey {
-        case type, url, data, mime_type
+        case type, bucket, path, url, data, mimeType = "mime_type"
+        case name, sizeBytes = "size_bytes", durationSeconds = "duration_seconds"
     }
 
     init(from decoder: Decoder) throws {
@@ -399,17 +547,43 @@ struct MessageAttachment: Identifiable, Equatable, Codable {
         } else {
             self.type = "image"
         }
-        self.url = urlStr ?? ""
+        self.bucket = try container.decodeIfPresent(String.self, forKey: .bucket)
+        self.path = try container.decodeIfPresent(String.self, forKey: .path)
+        self.url = urlStr
+        self.mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
+        self.name = try container.decodeIfPresent(String.self, forKey: .name)
+        self.sizeBytes = try container.decodeIfPresent(Int.self, forKey: .sizeBytes)
+        self.durationSeconds = try container.decodeIfPresent(Double.self, forKey: .durationSeconds)
+        self.legacyData = dataStr
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(type, forKey: .type)
-        try container.encode(url, forKey: .url)
+        try container.encodeIfPresent(bucket, forKey: .bucket)
+        try container.encodeIfPresent(path, forKey: .path)
+        try container.encodeIfPresent(mimeType, forKey: .mimeType)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(sizeBytes, forKey: .sizeBytes)
+        try container.encodeIfPresent(durationSeconds, forKey: .durationSeconds)
     }
 
     static func == (lhs: MessageAttachment, rhs: MessageAttachment) -> Bool {
         lhs.id == rhs.id
+    }
+
+    var agentAttachment: AgentAttachment {
+        AgentAttachment(
+            type: type,
+            bucket: bucket,
+            path: path,
+            url: bucket == nil ? url : nil,
+            data: legacyData,
+            mime_type: mimeType,
+            name: name,
+            size_bytes: sizeBytes,
+            duration_seconds: durationSeconds
+        )
     }
 }
 

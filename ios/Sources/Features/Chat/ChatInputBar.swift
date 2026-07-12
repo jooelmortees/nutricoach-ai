@@ -28,8 +28,6 @@ struct ChatInputBar: View {
     var isAgentThinking: Bool = false
     /// True cuando hay audio grabándose (modo grabación activo).
     var isRecordingAudio: Bool = false
-    /// True cuando hay un audio ya grabado listo para enviar.
-    var hasReadyAudio: Bool = false
     /// True cuando hay imágenes adjuntas pendientes.
     var hasAttachments: Bool = false
     /// Recorder observable para alimentar la waveform y el contador.
@@ -56,23 +54,24 @@ struct ChatInputBar: View {
     }
 
     private var canSend: Bool {
-        (tieneTexto || hasReadyAudio || hasAttachments) && !isAgentThinking && !isRecordingAudio
+        (tieneTexto || recorder.recordedAudio != nil || hasAttachments)
+            && !isAgentThinking
+            && !isRecordingAudio
     }
 
     var body: some View {
-        Group {
+        VStack(spacing: 6) {
             if isRecordingAudio {
                 recordingBar
-            } else {
-                normalBar
             }
+            normalBar
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 6)
         .animation(.easeOut(duration: 0.22), value: isRecordingAudio)
         .animation(.easeInOut(duration: 0.2), value: isAgentThinking)
-        .animation(.easeInOut(duration: 0.2), value: hasReadyAudio)
+        .animation(.easeInOut(duration: 0.2), value: recorder.recordedAudio != nil)
     }
 
     // MARK: - Barra normal
@@ -86,19 +85,16 @@ struct ChatInputBar: View {
                     .foregroundStyle(textoClaro)
                     .frame(width: 38, height: 38)
             }
-            .disabled(isAgentThinking)
+            .disabled(isAgentThinking || isRecordingAudio)
             .accessibilityLabel("Abrir opciones")
 
-            // Campo de texto (o indicador de audio listo)
-            if hasReadyAudio {
-                audioReadyIndicator
-            } else {
-                textField
-            }
+            textField
 
             // Botón micrófono (fijo, a la izquierda del enviar)
-            micButton
-                .frame(width: 40, height: 40)
+            if !isRecordingAudio {
+                micButton
+                    .frame(width: 40, height: 40)
+            }
 
             // Botón enviar
             sendButton
@@ -125,28 +121,6 @@ struct ChatInputBar: View {
                 .onSubmit { if canSend { onSend() } }
                 .disabled(isAgentThinking)
                 .tint(verdeEnvío)
-        }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 14)
-    }
-
-    private var audioReadyIndicator: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "speaker.wave.2.fill")
-                .font(.system(size: 14))
-                .foregroundStyle(verdeEnvío)
-            Text("Audio listo")
-                .font(.subheadline)
-                .foregroundStyle(textoClaro)
-            Spacer()
-            Button {
-                recorder.audioData = nil
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(grisMedio)
-            }
-            .accessibilityLabel("Descartar audio")
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 14)
@@ -179,18 +153,17 @@ struct ChatInputBar: View {
                 .font(.system(size: 14, weight: .medium, design: .monospaced))
                 .foregroundStyle(textoClaro)
 
-            // Botón stop+enviar
-            Button(action: onSend) {
+            Button(action: onMicTap) {
                 Circle()
-                    .fill(verdeEnvío)
+                    .fill(Color.red.opacity(0.9))
                     .frame(width: 40, height: 40)
                     .overlay(
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundStyle(Color(red: 0.12, green: 0.12, blue: 0.12))
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
                     )
             }
-            .accessibilityLabel("Detener y enviar audio")
+            .accessibilityLabel("Detener grabación")
             .frame(width: 40, height: 40)
         }
         .padding(.horizontal, 10)
@@ -204,16 +177,16 @@ struct ChatInputBar: View {
     private var micButton: some View {
         Button(action: onMicTap) {
             Circle()
-                .fill(hasReadyAudio ? Color.white.opacity(0.15) : Color.white)
+                .fill(isRecordingAudio ? Color.red.opacity(0.18) : Color.white)
                 .frame(width: 40, height: 40)
                 .overlay(
-                    Image(systemName: hasReadyAudio ? "checkmark" : "mic.fill")
+                    Image(systemName: isRecordingAudio ? "stop.fill" : "mic.fill")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(hasReadyAudio ? textoClaro : Color(red: 0.18, green: 0.18, blue: 0.18))
+                        .foregroundStyle(isRecordingAudio ? Color.red : Color(red: 0.18, green: 0.18, blue: 0.18))
                 )
         }
         .disabled(isAgentThinking)
-        .accessibilityLabel(hasReadyAudio ? "Audio grabado" : "Grabar audio")
+        .accessibilityLabel(isRecordingAudio ? "Detener grabación" : "Grabar audio")
     }
 
     private var sendButton: some View {

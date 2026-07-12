@@ -18,8 +18,7 @@ enum AgentEvent {
     case error(String)
 }
 
-@MainActor
-final class AgentService: ObservableObject {
+final class AgentService {
     static let shared = AgentService()
 
     private let session: URLSession
@@ -35,9 +34,12 @@ final class AgentService: ObservableObject {
     /// Parsea SSE en formato estándar: `event: <type>\ndata: <json>\n\n`.
     func sendMessage(
         conversationId: String,
+        clientMessageId: UUID,
+        assistantMessageId: UUID,
         message: String,
         attachments: [AgentAttachment] = [],
-        onEvent: @escaping (AgentEvent) -> Void
+        webSearch: Bool = false,
+        onEvent: @escaping @MainActor (AgentEvent) -> Void
     ) async {
         do {
             let token = try await SupabaseService.shared.client.auth.session.accessToken
@@ -49,15 +51,18 @@ final class AgentService: ObservableObject {
             req.setValue(Config.supabaseAnonKey, forHTTPHeaderField: "apikey")
             let body = AgentRequest(
                 conversation_id: conversationId,
+                client_message_id: clientMessageId.uuidString.lowercased(),
+                assistant_message_id: assistantMessageId.uuidString.lowercased(),
                 message: message,
-                attachments: attachments
+                attachments: attachments,
+                web_search: webSearch
             )
             req.httpBody = try JSONEncoder().encode(body)
 
             let (bytes, response) = try await session.bytes(for: req)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-                onEvent(.error("HTTP error: \(status)"))
+                await onEvent(.error("HTTP error: \(status)"))
                 return
             }
 
@@ -66,6 +71,7 @@ final class AgentService: ObservableObject {
             var currentEvent: String?
             var receivedDone = false
             for try await line in bytes.lines {
+                guard !Task.isCancelled else { return }
                 if line.isEmpty {
                     currentEvent = nil
                     continue
@@ -80,7 +86,7 @@ final class AgentService: ObservableObject {
                         if case .done = event {
                             receivedDone = true
                         }
-                        onEvent(event)
+                        await onEvent(event)
                     }
                 }
             }
@@ -89,12 +95,12 @@ final class AgentService: ObservableObject {
             // 'done' para que el UI no quede con isAgentThinking=true para siempre.
             if !receivedDone {
                 AppLogger.warning("Stream SSE termino sin evento 'done'. Forzando done.")
-                onEvent(.done)
+                await onEvent(.done)
             }
         } catch {
-            onEvent(.error(error.localizedDescription))
+            await onEvent(.error(error.localizedDescription))
             // Incluso si hubo error, emitir 'done' para resetear el UI
-            onEvent(.done)
+            await onEvent(.done)
         }
     }
 
@@ -139,7 +145,12 @@ final class AgentService: ObservableObject {
     }
 
     /// Carga el historial de mensajes de una conversación.
-    func loadHistory(conversationId: String) async throws -> [HistoryMessage] {
+    func loadHistory(
+        conversationId: String,
+        before createdAt: String? = nil,
+        beforeId: String? = nil,
+        limit: Int = 50
+    ) async throws -> [HistoryMessage] {
         struct Row: Decodable {
             let id: UUID
             let role: String
@@ -149,15 +160,31 @@ final class AgentService: ObservableObject {
             let created_at: String
         }
         let supabase = SupabaseService.shared.client
-        let rows: [Row] = try await supabase
-            .from("messages")
-            .select("id,role,content,thinking,attachments,created_at")
-            .eq("conversation_id", value: conversationId)
-            .order("created_at", ascending: true)
-            .execute()
-            .value
+        let rows: [Row]
+        if let createdAt, let beforeId {
+            rows = try await supabase
+                .from("messages")
+                .select("id,role,content,thinking,attachments,created_at")
+                .eq("conversation_id", value: conversationId)
+                .or("created_at.lt.\(createdAt),and(created_at.eq.\(createdAt),id.lt.\(beforeId))")
+                .order("created_at", ascending: false)
+                .order("id", ascending: false)
+                .limit(limit)
+                .execute()
+                .value
+        } else {
+            rows = try await supabase
+                .from("messages")
+                .select("id,role,content,thinking,attachments,created_at")
+                .eq("conversation_id", value: conversationId)
+                .order("created_at", ascending: false)
+                .order("id", ascending: false)
+                .limit(limit)
+                .execute()
+                .value
+        }
 
-        return rows.map { row in
+        return rows.reversed().map { row in
             HistoryMessage(
                 id: row.id.uuidString,
                 role: row.role == "user" ? .user : .assistant,
@@ -166,6 +193,17 @@ final class AgentService: ObservableObject {
                 attachments: row.attachments ?? [],
                 createdAt: row.created_at
             )
+        }
+    }
+
+    func deleteMessages(ids: [UUID]) async throws {
+        let supabase = SupabaseService.shared.client
+        for id in ids {
+            try await supabase
+                .from("messages")
+                .delete()
+                .eq("id", value: id.uuidString)
+                .execute()
         }
     }
 
@@ -211,22 +249,45 @@ final class AgentService: ObservableObject {
 
 struct AgentAttachment: Encodable {
     let type: String  // "image" | "audio"
+    let bucket: String?
+    let path: String?
     let url: String?
     let data: String?
     let mime_type: String?
+    let name: String?
+    let size_bytes: Int?
+    let duration_seconds: Double?
 
-    init(type: String, url: String? = nil, data: String? = nil, mime_type: String? = nil) {
+    init(
+        type: String,
+        bucket: String? = nil,
+        path: String? = nil,
+        url: String? = nil,
+        data: String? = nil,
+        mime_type: String? = nil,
+        name: String? = nil,
+        size_bytes: Int? = nil,
+        duration_seconds: Double? = nil
+    ) {
         self.type = type
+        self.bucket = bucket
+        self.path = path
         self.url = url
         self.data = data
         self.mime_type = mime_type
+        self.name = name
+        self.size_bytes = size_bytes
+        self.duration_seconds = duration_seconds
     }
 }
 
 struct AgentRequest: Encodable {
     let conversation_id: String
+    let client_message_id: String
+    let assistant_message_id: String
     let message: String
     let attachments: [AgentAttachment]
+    let web_search: Bool
 }
 
 /// Mensaje cargado del historial (distinto de ChatMessage que es el del VM).

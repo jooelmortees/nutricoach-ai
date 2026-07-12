@@ -66,7 +66,7 @@ targets:
         NSCameraUsageDescription: "Necesitamos la cámara para fotografiar tus comidas y que el agente las analice."
         NSPhotoLibraryUsageDescription: "Para que puedas elegir fotos de tus comidas desde la galería."
         NSPhotoLibraryAddUsageDescription: "Para guardar en tu galería las recetas e informes que generes."
-        NSMicrophoneUsageDescription: "Reservado para futuras funciones de audio."
+        NSMicrophoneUsageDescription: "NutriCoach necesita el micrófono para grabar notas de voz que puedes adjuntar al chat."
         NSLocationWhenInUseUsageDescription: "Opcional: para registrar dónde comes y detectar restaurantes frecuentes."
         NSUserNotificationUsageDescription: "Para enviarte recordatorios de comidas, hidratación y entrenamiento."
         ITSAppUsesNonExemptEncryption: false

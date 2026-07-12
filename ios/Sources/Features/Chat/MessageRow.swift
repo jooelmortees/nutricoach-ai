@@ -9,24 +9,24 @@ import SwiftUI
 
 struct MessageRow: View {
     let message: ChatMessage
-    let isLastAssistant: Bool
+    @ObservedObject var audioPlayback: AudioPlaybackController
     let onImageTap: (String) -> Void
     let onSaveMeal: (PendingMeal) async -> Bool
-    var onRegenerate: (() -> Void)? = nil
 
-    @State private var wasStreaming = false
-
+    @ViewBuilder
     var body: some View {
-        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
+        if message.role == .user {
             contentStack
-        }
-        .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
-        .padding(.vertical, 10)
-        .onChange(of: message.isStreaming) { _, streaming in
-            if streaming { wasStreaming = true }
-        }
-        .onAppear {
-            if message.isStreaming { wasStreaming = true }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.vertical, 10)
+        } else {
+            HStack(alignment: .top, spacing: 8) {
+                NutriGrowthIndicator(isActive: message.isStreaming)
+                    .padding(.top, 2)
+                contentStack
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.vertical, 10)
         }
     }
 
@@ -40,7 +40,11 @@ struct MessageRow: View {
 
             // Imagenes adjuntas
             if let attachments = message.attachments, !attachments.isEmpty {
-                AttachmentsGrid(attachments: attachments, onImageTap: onImageTap)
+                AttachmentsGrid(
+                    attachments: attachments,
+                    audioPlayback: audioPlayback,
+                    onImageTap: onImageTap
+                )
             }
 
             // Tools en ejecucion
@@ -49,7 +53,7 @@ struct MessageRow: View {
             }
 
             // Contenido del mensaje
-            if !message.content.isEmpty || !message.isStreaming {
+            if !message.content.isEmpty {
                 messageContent
             }
         }
@@ -86,23 +90,9 @@ struct MessageRow: View {
         } else {
             // ASSISTANT: texto plano, sin bocadillo, pegado a la izquierda
             VStack(alignment: .leading, spacing: 6) {
-                if message.content.isEmpty && message.isStreaming {
-                    StreamingDots()
-                } else if message.isStreaming {
-                    // Streaming en vivo: revelar letra por letra
-                    StreamingMarkdownView(text: message.content) { finished in
-                        if finished { wasStreaming = false }
-                    }
-                    if !message.content.isEmpty {
-                        StreamingDots()
-                            .padding(.top, 2)
-                    }
-                } else if wasStreaming {
-                    // Streaming acabo pero aun revelando texto pendiente
-                    StreamingMarkdownView(text: message.content) { finished in
-                        if finished { wasStreaming = false }
-                    }
-                } else if let extracted = PendingMeal.extract(from: message.content), let macros = extracted.macros {
+                if !message.isStreaming,
+                   let extracted = PendingMeal.extract(from: message.content),
+                   let macros = extracted.macros {
                     // Mensaje del historial con macros: sin animacion
                     if !extracted.cleaned.isEmpty {
                         MarkdownView(text: extracted.cleaned)
@@ -123,21 +113,6 @@ struct MessageRow: View {
                 }
             }
         }
-    }
-}
-
-// MARK: - Assistant avatar (no usado pero mantenido por compat)
-
-struct AssistantAvatar: View {
-    var body: some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(Color.green.opacity(0.15))
-            .frame(width: 28, height: 28)
-            .overlay(
-                Image(systemName: "leaf.fill")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.green)
-            )
     }
 }
 
@@ -394,6 +369,7 @@ struct PendingIngredient: Codable, Equatable, Identifiable {
 
 struct AttachmentsGrid: View {
     let attachments: [MessageAttachment]
+    @ObservedObject var audioPlayback: AudioPlaybackController
     let onImageTap: (String) -> Void
 
     private let thumbSize: CGFloat = 70
@@ -401,18 +377,31 @@ struct AttachmentsGrid: View {
 
     var body: some View {
         let images = attachments.filter { $0.type == "image" }
-        if images.isEmpty {
-            EmptyView()
-        } else if images.count == 1 {
-            singleImage(images[0])
-        } else {
-            multipleImages(images)
+        let audios = attachments.filter { $0.type == "audio" }
+        VStack(alignment: .trailing, spacing: 6) {
+            if images.count == 1 {
+                singleImage(images[0])
+            } else if images.count > 1 {
+                multipleImages(images)
+            }
+            ForEach(audios) { audio in
+                AudioAttachmentCard(
+                    id: audio.id,
+                    title: audio.name ?? "Grabación de voz",
+                    duration: audio.durationSeconds ?? 0,
+                    sizeBytes: audio.sizeBytes ?? legacyAudioSize(audio.legacyData),
+                    remoteURL: audio.url,
+                    legacyBase64: audio.legacyData,
+                    playback: audioPlayback
+                )
+                .frame(maxWidth: 280)
+            }
         }
     }
 
     @ViewBuilder
     private func singleImage(_ att: MessageAttachment) -> some View {
-        AsyncImage(url: URL(string: att.url)) { phase in
+        AsyncImage(url: att.url.flatMap(URL.init(string:))) { phase in
             switch phase {
             case .empty:
                 RoundedRectangle(cornerRadius: cornerRadius)
@@ -423,7 +412,9 @@ struct AttachmentsGrid: View {
                 image.resizable().scaledToFill()
                     .frame(width: thumbSize * 1.8, height: thumbSize * 1.8)
                     .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-                    .onTapGesture { onImageTap(att.url) }
+                    .onTapGesture {
+                        if let url = att.url { onImageTap(url) }
+                    }
             case .failure:
                 RoundedRectangle(cornerRadius: cornerRadius)
                     .fill(Color(.tertiarySystemBackground))
@@ -438,8 +429,8 @@ struct AttachmentsGrid: View {
     private func multipleImages(_ images: [MessageAttachment]) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             LazyHGrid(rows: [GridItem(.fixed(thumbSize))], spacing: 4) {
-                ForEach(images, id: \.url) { att in
-                    AsyncImage(url: URL(string: att.url)) { phase in
+                ForEach(images) { att in
+                    AsyncImage(url: att.url.flatMap(URL.init(string:))) { phase in
                         switch phase {
                         case .empty:
                             RoundedRectangle(cornerRadius: cornerRadius)
@@ -451,7 +442,9 @@ struct AttachmentsGrid: View {
                                 .frame(width: thumbSize, height: thumbSize)
                                 .clipped()
                                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-                                .onTapGesture { onImageTap(att.url) }
+                                .onTapGesture {
+                                    if let url = att.url { onImageTap(url) }
+                                }
                         case .failure:
                             RoundedRectangle(cornerRadius: cornerRadius)
                                 .fill(Color(.tertiarySystemBackground))
@@ -466,40 +459,10 @@ struct AttachmentsGrid: View {
         }
         .frame(height: thumbSize)
     }
-}
 
-// MARK: - Streaming dots (onda suave)
-
-private struct StreamingDots: View {
-    @State private var phase: CGFloat = 0
-
-    var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<3) { i in
-                Circle()
-                    .fill(Color.secondary.opacity(0.5))
-                    .frame(width: 6, height: 6)
-                    .scaleEffect(scale(for: i))
-                    .opacity(opacity(for: i))
-            }
-        }
-        .onAppear {
-            withAnimation(.smooth(duration: 1.2).repeatForever(autoreverses: false)) {
-                phase = 1
-            }
-        }
-    }
-
-    private func scale(for index: Int) -> CGFloat {
-        let offset = CGFloat(index) / 3.0
-        let wave = sin((phase + offset) * .pi * 2)
-        return 0.6 + (wave + 1) * 0.3
-    }
-
-    private func opacity(for index: Int) -> CGFloat {
-        let offset = CGFloat(index) / 3.0
-        let wave = sin((phase + offset) * .pi * 2)
-        return 0.3 + (wave + 1) * 0.35
+    private func legacyAudioSize(_ base64: String?) -> Int {
+        guard let base64 else { return 0 }
+        return base64.count * 3 / 4
     }
 }
 
@@ -596,47 +559,5 @@ private struct MacroPill: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 4)
         .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-// MARK: - StreamingMarkdownView (solo para mensajes en streaming en vivo)
-
-/// Revela el texto del asistente letra por letra conforme llega via streaming.
-/// SOLO se usa cuando message.isStreaming == true (o wasStreaming == true tras
-/// terminar el streaming). Los mensajes del historial usan MarkdownView directo.
-///
-/// Patron basado en engeldlgado/toshllm StreamingRichText:
-/// - Timer.publish a 30fps (mas ligero que 60fps, suficiente para texto)
-/// - Catch-up proporcional: revealed + max(1, (target - revealed) / 8)
-/// - onFinished: callback cuando revealed alcanza text.count, para que
-///   MessageRow sepa que puede dejar de usar StreamingMarkdownView
-struct StreamingMarkdownView: View {
-    let text: String
-    var onFinished: ((Bool) -> Void)? = nil
-
-    @State private var revealed = 0
-    @State private var finishedReported = false
-
-    private let tick = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
-
-    var body: some View {
-        MarkdownView(text: String(text.prefix(revealed)))
-            .onReceive(tick) { _ in
-                let target = text.count
-                guard revealed < target else {
-                    if !finishedReported {
-                        finishedReported = true
-                        onFinished?(true)
-                    }
-                    return
-                }
-                revealed = min(target, revealed + max(1, (target - revealed) / 8))
-            }
-            .onChange(of: text) { _, newValue in
-                if revealed > newValue.count {
-                    revealed = newValue.count
-                }
-                finishedReported = false
-            }
     }
 }

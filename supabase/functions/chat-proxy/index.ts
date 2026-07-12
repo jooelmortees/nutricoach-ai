@@ -15,27 +15,73 @@ const GEMINI_BASE_URL = Deno.env.get("GEMINI_BASE_URL") ?? "https://generativela
 const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash";
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "app. nutricoach://",
+  "Access-Control-Allow-Origin": "app.nutricoach://",
   "Access-Control-Allow-Headers": "authorization, content-type, x-client-info, apikey",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
 const MAX_AGENT_ITERATIONS = 6;
+const CHAT_ATTACHMENTS_BUCKET = "chat-attachments";
+const MAX_ATTACHMENTS = 8;
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const SIGNED_URL_TTL_SECONDS = 10 * 60;
+
+type AttachmentType = "image" | "audio";
+
+interface AttachmentRequest {
+  type?: unknown;
+  bucket?: unknown;
+  path?: unknown;
+  mime_type?: unknown;
+  name?: unknown;
+  size_bytes?: unknown;
+  duration_seconds?: unknown;
+  url?: unknown;
+  data?: unknown;
+}
+
+interface StoredAttachment {
+  type: AttachmentType;
+  bucket: typeof CHAT_ATTACHMENTS_BUCKET;
+  path: string;
+  mime_type: string;
+  name: string;
+  size_bytes: number;
+  duration_seconds: number | null;
+}
+
+type ValidatedAttachment =
+  | { kind: "storage"; metadata: StoredAttachment }
+  | {
+    kind: "legacy";
+    type: AttachmentType;
+    mimeType?: string;
+    url?: string;
+    base64Data?: string;
+    persisted: Record<string, string>;
+  };
+
+interface PreparedAttachments {
+  persisted: Array<StoredAttachment | Record<string, string>>;
+  imageUrls: string[];
+  audioBase64: string[];
+}
 
 interface ChatRequest {
   conversation_id: string;
+  client_message_id?: string;
+  assistant_message_id?: string;
   message: string;
-  attachments?: Array<{
-    type: "image" | "video" | "audio";
-    url?: string;
-    data?: string;
-    mime_type?: string;
-  }>;
+  attachments?: AttachmentRequest[];
+  web_search?: boolean;
 }
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
+  }
+  if (req.method !== "POST") {
+    return jsonError(405, "Method not allowed");
   }
 
   try {
@@ -56,39 +102,85 @@ serve(async (req) => {
     }
 
     // 2. Parsear body
-    const body: ChatRequest = await req.json();
+    let rawBody: unknown;
+    try {
+      rawBody = await req.json();
+    } catch (_) {
+      return jsonError(400, "Invalid JSON body");
+    }
+    if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) {
+      return jsonError(400, "Invalid request body");
+    }
+    const body = rawBody as ChatRequest;
     // Normalizar message: si viene undefined/null, lo convertimos a string vacío
     // para evitar errores downstream (trim, insert en BD, etc.).
+    if (body.message !== undefined && body.message !== null && typeof body.message !== "string") {
+      return jsonError(400, "Invalid message");
+    }
     body.message = body.message ?? "";
-    const hasAttachments = (body.attachments ?? []).length > 0;
+    if (body.message.length > 20_000) {
+      return jsonError(400, "Message is too long");
+    }
+    const conversationId = validateOptionalUuid(body.conversation_id);
+    if (!conversationId) return jsonError(400, "Invalid conversation_id");
+    body.conversation_id = conversationId;
+    const clientMessageId = validateOptionalUuid(body.client_message_id) ?? crypto.randomUUID();
+    const assistantMessageId = validateOptionalUuid(body.assistant_message_id) ?? crypto.randomUUID();
+    if (body.web_search !== undefined && typeof body.web_search !== "boolean") {
+      return jsonError(400, "Invalid web_search value");
+    }
+    const rawAttachments = body.attachments ?? [];
+    const hasAttachments = Array.isArray(rawAttachments) && rawAttachments.length > 0;
     // Permitir message vacío si hay adjuntos (audio-only, image-only, audio+image).
     // El cliente ya inyecta un fallback descriptivo, pero el backend debe tolerarlo.
-    if (!body.conversation_id || (!body.message && !hasAttachments)) {
+    if (!body.message.trim() && !hasAttachments) {
       return jsonError(400, "Missing conversation_id or message/attachments");
     }
+
+    const attachments = validateAttachments(rawAttachments, user.id, body.conversation_id);
 
     // 3. Cliente con service_role (bypasea RLS) para el agente
     const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // 4. Cargar perfil, hechos relevantes y mensajes recientes
+    // 4. Verificar ownership antes de leer historial o escribir con service_role.
+    const ownershipError = await verifyConversationOwnership(
+      supabaseAdmin,
+      body.conversation_id,
+      user.id,
+    );
+    if (ownershipError) return ownershipError;
+
+    const preparedAttachments = await prepareAttachments(supabaseAdmin, attachments);
+
+    // 5. Cargar perfil, hechos relevantes y mensajes recientes
     const profile = await loadProfile(supabaseAdmin, user.id);
     const facts = await loadActiveFacts(supabaseAdmin, user.id);
-    const recentMessages = await loadRecentMessages(supabaseAdmin, body.conversation_id, 20);
+    const recentMessages = await loadRecentMessages(
+      supabaseAdmin,
+      body.conversation_id,
+      clientMessageId,
+      20,
+    );
 
-    // 5. System prompt
+    // 6. System prompt
     const systemPrompt = buildSystemPrompt(profile, facts);
 
-    // 6. Guardar mensaje del usuario en BD
-    await saveUserMessage(supabaseAdmin, body.conversation_id, body.message, body.attachments);
+    // 7. Guardar mensaje del usuario en BD
+    await saveUserMessage(
+      supabaseAdmin,
+      clientMessageId,
+      body.conversation_id,
+      body.message,
+      preparedAttachments.persisted,
+    );
 
-    // 7. Construir mensajes para la API (formato OpenAI multimodal).
+    // 8. Construir mensajes para la API (formato OpenAI multimodal).
     //    image_url acepta URL pública directamente (signed URL funciona).
     const userContent: any[] = [];
-    const imageAttachments = (body.attachments ?? []).filter((a) => a.type === "image");
-    for (const att of imageAttachments) {
+    for (const imageUrl of preparedAttachments.imageUrls) {
       userContent.push({
         type: "image_url",
-        image_url: { url: att.url },
+        image_url: { url: imageUrl },
       });
     }
     // Audio: inline_data como input_audio (formato OpenAI-compatible soportado por Gemini).
@@ -99,42 +191,43 @@ serve(async (req) => {
     // el audio SÍ se procesa (confirmado con promptTokensDetails AUDIO=25).
     // Solucion: cuando hay audio, hacemos la llamada sin streaming y emitimos
     // la respuesta completa como eventos SSE al cliente.
-    const audioAttachments = (body.attachments ?? []).filter((a) => a.type === "audio" && !!a.data);
-    const hasAudio = audioAttachments.length > 0;
-    for (const att of audioAttachments) {
+    const hasAudio = preparedAttachments.audioBase64.length > 0;
+    for (const audioBase64 of preparedAttachments.audioBase64) {
       userContent.push({
         type: "input_audio",
-        input_audio: { data: att.data!, format: "wav" },
+        input_audio: { data: audioBase64, format: "wav" },
       });
     }
     let displayMessage = body.message;
-    if (imageAttachments.length > 0 && audioAttachments.length > 0) {
+    if (preparedAttachments.imageUrls.length > 0 && preparedAttachments.audioBase64.length > 0) {
       // Imagen + audio: prompt conjunto
       const prefix = body.message.trim() ? body.message + "\n\n" : "";
       displayMessage = prefix +
         "Analiza esta imagen de comida y escucha el audio del usuario. " +
         "Devuelve las macros estimadas (kcal, proteínas, carbohidratos, grasas) en formato JSON al inicio de tu respuesta, seguido de un comentario en español.";
-    } else if (imageAttachments.length > 0) {
+    } else if (preparedAttachments.imageUrls.length > 0) {
       displayMessage = body.message +
         (body.message.trim() ? "" : "\n\n") +
         "\n\nAnaliza esta imagen de comida y devuelve las macros estimadas (kcal, proteínas, carbohidratos, grasas) en formato JSON al inicio de tu respuesta, seguido de un comentario en español.";
-    } else if (audioAttachments.length > 0 && !body.message.trim()) {
+    } else if (preparedAttachments.audioBase64.length > 0 && !body.message.trim()) {
       // Audio sin texto ni imagen: fallback descriptivo
       displayMessage = "Escucha este audio del usuario y responde.";
     }
     userContent.push({ type: "text", text: displayMessage });
 
-    // 8. Mensajes base para la API. 'system' es un mensaje role: system.
+    // 9. Mensajes base para la API. 'system' es un mensaje role: system.
     let apiMessages: any[] = [
       { role: "system", content: systemPrompt },
       ...recentMessages.map((m: any) => ({ role: m.role, content: m.content })),
       { role: "user", content: userContent },
     ];
 
-    // 9. Tools (function calling formato OpenAI)
-    const tools = getAgentTools();
+    // 10. Tools (function calling formato OpenAI)
+    const tools = getAgentTools().filter((tool) =>
+      body.web_search === true || tool.function.name !== "web_search"
+    );
 
-    // 10. Loop agentico: Gemini puede llamar tools, ejecutamos, volvemos a llamar
+    // 11. Loop agentico: Gemini puede llamar tools, ejecutamos, volvemos a llamar
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
@@ -152,7 +245,7 @@ serve(async (req) => {
             // llega pero Gemini responde "no he podido escuchar el audio"
             // con stream:true, mientras que con stream:false el audio se
             // procesa correctamente con promptTokensDetails AUDIO=25).
-            const useStreaming = !(hasAudio && iteration === 0);
+            const useStreaming = !hasAudio;
             const upstreamResp = await fetch(`${GEMINI_BASE_URL}/chat/completions`, {
               method: "POST",
               headers: {
@@ -230,6 +323,7 @@ serve(async (req) => {
                 if (!assistantMessageSaved && (fullText || iterThinking)) {
                   await saveAssistantMessage(
                     supabaseAdmin,
+                    assistantMessageId,
                     body.conversation_id,
                     fullText || iterText,
                     iterThinking || null
@@ -396,6 +490,7 @@ serve(async (req) => {
               if (!assistantMessageSaved && (fullText || iterThinking)) {
                 await saveAssistantMessage(
                   supabaseAdmin,
+                  assistantMessageId,
                   body.conversation_id,
                   fullText || iterText,
                   iterThinking || null
@@ -480,6 +575,9 @@ serve(async (req) => {
       },
     });
   } catch (err) {
+    if (err instanceof HttpError) {
+      return jsonError(err.status, err.message);
+    }
     return jsonError(500, String(err));
   }
 });
@@ -487,6 +585,13 @@ serve(async (req) => {
 // ============================================================
 // HELPERS
 // ============================================================
+
+class HttpError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
 
 function jsonError(status: number, message: string) {
   return new Response(JSON.stringify({ error: message }), {
@@ -504,6 +609,291 @@ function extractJson(text: string): string | null {
   const lastBrace = text.lastIndexOf("}");
   if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) return null;
   return text.substring(firstBrace, lastBrace + 1);
+}
+
+async function verifyConversationOwnership(
+  supabase: any,
+  conversationId: string,
+  userId: string,
+): Promise<Response | null> {
+  const { data, error } = await supabase
+    .from("conversations")
+    .select("user_id")
+    .eq("id", conversationId)
+    .maybeSingle();
+
+  if (error) {
+    throw new HttpError(500, `Error verificando la conversación: ${error.message}`);
+  }
+  if (!data) return jsonError(404, "Conversation not found");
+  if (String(data.user_id).toLowerCase() !== userId.toLowerCase()) {
+    return jsonError(403, "Conversation does not belong to the authenticated user");
+  }
+  return null;
+}
+
+function validateAttachments(
+  rawAttachments: unknown,
+  userId: string,
+  conversationId: string,
+): ValidatedAttachment[] {
+  if (!Array.isArray(rawAttachments)) {
+    throw new HttpError(400, "attachments must be an array");
+  }
+  if (rawAttachments.length > MAX_ATTACHMENTS) {
+    throw new HttpError(400, `A maximum of ${MAX_ATTACHMENTS} attachments is allowed`);
+  }
+
+  const validated = rawAttachments.map((rawAttachment, index) => {
+    if (!rawAttachment || typeof rawAttachment !== "object" || Array.isArray(rawAttachment)) {
+      throw new HttpError(400, `Attachment ${index + 1} is invalid`);
+    }
+    const attachment = rawAttachment as AttachmentRequest;
+    const type = validateAttachmentType(attachment.type, index);
+    const isStorageAttachment = attachment.path !== undefined || attachment.bucket !== undefined;
+
+    if (isStorageAttachment) {
+      return validateStorageAttachment(attachment, type, userId, conversationId, index);
+    }
+    throw new HttpError(400, `Attachment ${index + 1} must use private storage`);
+  });
+
+  if (validated.filter((attachment) => attachment.kind === "storage" && attachment.metadata.type === "audio").length > 1) {
+    throw new HttpError(400, "Only one audio attachment is allowed");
+  }
+  return validated;
+}
+
+function validateOptionalUuid(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+    throw new HttpError(400, "Invalid message id");
+  }
+  return value.toLowerCase();
+}
+
+function validateAttachmentType(value: unknown, index: number): AttachmentType {
+  if (value !== "image" && value !== "audio") {
+    throw new HttpError(400, `Attachment ${index + 1} has an invalid type`);
+  }
+  return value;
+}
+
+function validateStorageAttachment(
+  attachment: AttachmentRequest,
+  type: AttachmentType,
+  userId: string,
+  conversationId: string,
+  index: number,
+): ValidatedAttachment {
+  if (attachment.bucket !== CHAT_ATTACHMENTS_BUCKET) {
+    throw new HttpError(400, `Attachment ${index + 1} has an invalid bucket`);
+  }
+  if (attachment.url !== undefined || attachment.data !== undefined) {
+    throw new HttpError(400, `Storage attachment ${index + 1} must not include legacy url or data`);
+  }
+  if (typeof attachment.path !== "string" || !attachment.path || attachment.path.length > 1024) {
+    throw new HttpError(400, `Attachment ${index + 1} has an invalid path`);
+  }
+
+  const pathSegments = attachment.path.split("/");
+  if (
+    pathSegments.length < 3 ||
+    pathSegments.some((segment) => !segment || segment === "." || segment === "..") ||
+    pathSegments[0].toLowerCase() !== userId.toLowerCase() ||
+    pathSegments[1].toLowerCase() !== conversationId.toLowerCase()
+  ) {
+    throw new HttpError(400, `Attachment ${index + 1} path does not match the user and conversation`);
+  }
+
+  const mimeType = validateMimeType(attachment.mime_type, type, index);
+  if (typeof attachment.name !== "string" || !attachment.name.trim() || attachment.name.length > 255) {
+    throw new HttpError(400, `Attachment ${index + 1} has an invalid name`);
+  }
+  if (
+    typeof attachment.size_bytes !== "number" ||
+    !Number.isSafeInteger(attachment.size_bytes) ||
+    attachment.size_bytes <= 0 ||
+    attachment.size_bytes > MAX_ATTACHMENT_BYTES
+  ) {
+    throw new HttpError(400, `Attachment ${index + 1} has an invalid size_bytes`);
+  }
+
+  const duration = attachment.duration_seconds;
+  if (
+    duration !== undefined &&
+    duration !== null &&
+    (typeof duration !== "number" || !Number.isFinite(duration) || duration < 0)
+  ) {
+    throw new HttpError(400, `Attachment ${index + 1} has an invalid duration_seconds`);
+  }
+
+  return {
+    kind: "storage",
+    metadata: {
+      type,
+      bucket: CHAT_ATTACHMENTS_BUCKET,
+      path: attachment.path,
+      mime_type: mimeType,
+      name: attachment.name.trim(),
+      size_bytes: attachment.size_bytes,
+      duration_seconds: duration === undefined || duration === null ? null : duration,
+    },
+  };
+}
+
+function validateLegacyAttachment(
+  attachment: AttachmentRequest,
+  type: AttachmentType,
+  index: number,
+): ValidatedAttachment {
+  const url = attachment.url === undefined ? undefined : validateLegacyUrl(attachment.url, index);
+  const mimeType = attachment.mime_type === undefined
+    ? undefined
+    : validateMimeType(attachment.mime_type, type, index);
+  if (attachment.data !== undefined && !mimeType) {
+    throw new HttpError(400, `Legacy attachment ${index + 1} with data requires mime_type`);
+  }
+  const base64Data = attachment.data === undefined
+    ? undefined
+    : validateBase64Data(attachment.data, mimeType, type, index);
+
+  if (type === "image" && !url && !base64Data) {
+    throw new HttpError(400, `Legacy image attachment ${index + 1} requires url or data`);
+  }
+  if (type === "audio" && !base64Data) {
+    throw new HttpError(400, `Legacy audio attachment ${index + 1} requires data`);
+  }
+
+  const persisted: Record<string, string> = { type };
+  if (url) persisted.url = url;
+  if (base64Data) persisted.data = attachment.data as string;
+  if (mimeType) persisted.mime_type = mimeType;
+
+  return { kind: "legacy", type, mimeType, url, base64Data, persisted };
+}
+
+function validateMimeType(value: unknown, type: AttachmentType, index: number): string {
+  if (typeof value !== "string") {
+    throw new HttpError(400, `Attachment ${index + 1} requires mime_type`);
+  }
+  const mimeType = value.toLowerCase();
+  const allowed = type === "image" ? ["image/jpeg", "image/png"] : ["audio/wav"];
+  if (!allowed.includes(mimeType)) {
+    throw new HttpError(400, `Attachment ${index + 1} has an invalid mime_type`);
+  }
+  return mimeType;
+}
+
+function validateLegacyUrl(value: unknown, index: number): string {
+  if (typeof value !== "string" || value.length > 4096) {
+    throw new HttpError(400, `Attachment ${index + 1} has an invalid url`);
+  }
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") throw new Error("Invalid protocol");
+  } catch (_) {
+    throw new HttpError(400, `Attachment ${index + 1} has an invalid url`);
+  }
+  return value;
+}
+
+function validateBase64Data(
+  value: unknown,
+  mimeType: string | undefined,
+  type: AttachmentType,
+  index: number,
+): string {
+  if (typeof value !== "string" || !value) {
+    throw new HttpError(400, `Attachment ${index + 1} has invalid base64 data`);
+  }
+
+  let base64Data = value;
+  const dataUrlMatch = value.match(/^data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})$/);
+  if (value.startsWith("data:")) {
+    if (!dataUrlMatch) {
+      throw new HttpError(400, `Attachment ${index + 1} has invalid base64 data`);
+    }
+    const embeddedMimeType = validateMimeType(dataUrlMatch[1], type, index);
+    if (mimeType && embeddedMimeType !== mimeType) {
+      throw new HttpError(400, `Attachment ${index + 1} has inconsistent mime_type`);
+    }
+    base64Data = dataUrlMatch[2];
+  }
+
+  if (
+    base64Data.length > Math.ceil(MAX_ATTACHMENT_BYTES * 4 / 3) + 4 ||
+    base64Data.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/.test(base64Data)
+  ) {
+    throw new HttpError(400, `Attachment ${index + 1} has invalid base64 data`);
+  }
+
+  const padding = base64Data.endsWith("==") ? 2 : base64Data.endsWith("=") ? 1 : 0;
+  const decodedSize = (base64Data.length * 3 / 4) - padding;
+  if (decodedSize <= 0 || decodedSize > MAX_ATTACHMENT_BYTES) {
+    throw new HttpError(400, `Attachment ${index + 1} exceeds the 8 MiB limit`);
+  }
+  return base64Data;
+}
+
+async function prepareAttachments(
+  supabase: any,
+  attachments: ValidatedAttachment[],
+): Promise<PreparedAttachments> {
+  const prepared: PreparedAttachments = { persisted: [], imageUrls: [], audioBase64: [] };
+
+  for (const attachment of attachments) {
+    if (attachment.kind === "legacy") {
+      prepared.persisted.push(attachment.persisted);
+      if (attachment.type === "image") {
+        if (attachment.url) {
+          prepared.imageUrls.push(attachment.url);
+        } else if (attachment.base64Data && attachment.mimeType) {
+          prepared.imageUrls.push(`data:${attachment.mimeType};base64,${attachment.base64Data}`);
+        }
+      } else if (attachment.base64Data) {
+        prepared.audioBase64.push(attachment.base64Data);
+      }
+      continue;
+    }
+
+    const metadata = attachment.metadata;
+    prepared.persisted.push(metadata);
+    const storage = supabase.storage.from(metadata.bucket);
+
+    if (metadata.type === "image") {
+      const { data, error } = await storage.createSignedUrl(metadata.path, SIGNED_URL_TTL_SECONDS);
+      if (error || !data?.signedUrl) {
+        throw new HttpError(400, `No se pudo acceder al adjunto ${metadata.name}: ${error?.message ?? "URL no disponible"}`);
+      }
+      prepared.imageUrls.push(data.signedUrl);
+      continue;
+    }
+
+    const { data, error } = await storage.download(metadata.path);
+    if (error || !data) {
+      throw new HttpError(400, `No se pudo descargar el adjunto ${metadata.name}: ${error?.message ?? "archivo no disponible"}`);
+    }
+    if (data.size > MAX_ATTACHMENT_BYTES || data.size !== metadata.size_bytes) {
+      throw new HttpError(400, `El tamaño real del adjunto ${metadata.name} no coincide con size_bytes`);
+    }
+    if (data.type && data.type.toLowerCase() !== metadata.mime_type) {
+      throw new HttpError(400, `El MIME real del adjunto ${metadata.name} no coincide con mime_type`);
+    }
+    prepared.audioBase64.push(bytesToBase64(new Uint8Array(await data.arrayBuffer())));
+  }
+
+  return prepared;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
 }
 
 async function loadProfile(supabase: any, userId: string) {
@@ -526,50 +916,130 @@ async function loadActiveFacts(supabase: any, userId: string) {
   return data ?? [];
 }
 
-async function loadRecentMessages(supabase: any, conversationId: string, limit: number) {
-  const { data } = await supabase
+async function loadRecentMessages(
+  supabase: any,
+  conversationId: string,
+  excludeMessageId: string,
+  limit: number,
+) {
+  const { data, error } = await supabase
     .from("messages")
-    .select("role, content, thinking")
+    .select("role, content, thinking, attachments")
     .eq("conversation_id", conversationId)
+    .neq("id", excludeMessageId)
     .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
     .limit(limit);
-  return (data ?? []).reverse();
+  if (error) {
+    throw new Error(`Error cargando mensajes recientes: ${error.message}`);
+  }
+  return (data ?? []).reverse().map((message: any) => {
+    if (message.content?.trim()) return message;
+    const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+    const hasAudio = attachments.some((attachment: any) => attachment?.type === "audio");
+    const hasImage = attachments.some((attachment: any) => attachment?.type === "image");
+    return {
+      ...message,
+      content: hasAudio && hasImage
+        ? "[El usuario envió una imagen y una nota de voz en este turno.]"
+        : hasAudio
+        ? "[El usuario envió una nota de voz en este turno.]"
+        : hasImage
+        ? "[El usuario envió una imagen en este turno.]"
+        : "[Mensaje sin texto]",
+    };
+  });
 }
 
 async function saveUserMessage(
   supabase: any,
+  messageId: string,
   conversationId: string,
   content: string,
   attachments?: any[]
 ) {
-  await supabase.from("messages").insert({
+  const { error: insertError } = await supabase.from("messages").insert({
+    id: messageId,
     conversation_id: conversationId,
     role: "user",
     content,
     attachments: attachments ?? [],
   });
-  await supabase
+  if (insertError) {
+    if (insertError.code !== "23505") {
+      throw new Error(`Error guardando el mensaje del usuario: ${insertError.message}`);
+    }
+    const { data: existing, error: existingError } = await supabase
+      .from("messages")
+      .select("conversation_id, role")
+      .eq("id", messageId)
+      .maybeSingle();
+    if (
+      existingError ||
+      !existing ||
+      String(existing.conversation_id).toLowerCase() !== conversationId.toLowerCase() ||
+      existing.role !== "user"
+    ) {
+      throw new HttpError(409, "Message id is already in use");
+    }
+  }
+
+  const { error: updateError } = await supabase
     .from("conversations")
     .update({ last_message_at: new Date().toISOString() })
     .eq("id", conversationId);
+  if (updateError) {
+    throw new Error(`Error actualizando la conversación: ${updateError.message}`);
+  }
 }
 
 async function saveAssistantMessage(
   supabase: any,
+  messageId: string,
   conversationId: string,
   content: string,
-  thinking?: string
+  thinking?: string | null
 ) {
-  await supabase.from("messages").insert({
-    conversation_id: conversationId,
-    role: "assistant",
-    content: content || "",
-    thinking: thinking || null,
-  });
-  await supabase
+  const { data: existing, error: existingError } = await supabase
+    .from("messages")
+    .select("conversation_id, role")
+    .eq("id", messageId)
+    .maybeSingle();
+  if (existingError) {
+    throw new Error(`Error comprobando el mensaje del asistente: ${existingError.message}`);
+  }
+
+  if (existing) {
+    if (String(existing.conversation_id).toLowerCase() !== conversationId.toLowerCase() || existing.role !== "assistant") {
+      throw new HttpError(409, "Assistant message id is already in use");
+    }
+    const { error: updateMessageError } = await supabase
+      .from("messages")
+      .update({ content: content || "", thinking: thinking || null })
+      .eq("id", messageId);
+    if (updateMessageError) {
+      throw new Error(`Error actualizando el mensaje del asistente: ${updateMessageError.message}`);
+    }
+  } else {
+    const { error: insertError } = await supabase.from("messages").insert({
+      id: messageId,
+      conversation_id: conversationId,
+      role: "assistant",
+      content: content || "",
+      thinking: thinking || null,
+    });
+    if (insertError) {
+      throw new Error(`Error guardando el mensaje del asistente: ${insertError.message}`);
+    }
+  }
+
+  const { error: updateError } = await supabase
     .from("conversations")
     .update({ last_message_at: new Date().toISOString() })
     .eq("id", conversationId);
+  if (updateError) {
+    throw new Error(`Error actualizando la conversación: ${updateError.message}`);
+  }
 }
 
 async function saveMeal(supabase: any, userId: string, analysis: any) {

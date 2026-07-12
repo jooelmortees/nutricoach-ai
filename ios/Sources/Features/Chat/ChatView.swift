@@ -11,8 +11,10 @@ import Photos
 
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = ChatViewModel()
     @StateObject private var audioRecorder = AudioRecorder()
+    @StateObject private var audioPlayback = AudioPlaybackController()
     @StateObject private var photoLibrary = PhotoLibraryService.shared
     @State private var inputText: String = ""
     @State private var selectedItems: [PhotosPickerItem] = []
@@ -20,10 +22,16 @@ struct ChatView: View {
     @State private var fullscreenImageURL: String?
     @State private var showClearConfirm: Bool = false
     @State private var webSearchEnabled: Bool = false
-    @State private var isRecordingAudio: Bool = false
     @State private var showPlusMenu: Bool = false
     @State private var showCamera: Bool = false
     @State private var showFullGallery: Bool = false
+    @State private var isPinnedToBottom = true
+    @State private var isUserScrolling = false
+    @State private var bottomDistance: CGFloat = 0
+    @State private var scrollToBottomRequest = 0
+    @State private var recordingTask: Task<Void, Never>?
+
+    private let bottomAnchorId = "chat-bottom-anchor"
 
     var body: some View {
         NavigationStack {
@@ -44,7 +52,7 @@ struct ChatView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {
-                            Task { await viewModel.newConversation() }
+                            Task { await startNewConversation() }
                         } label: {
                             Label("Nueva conversacion", systemImage: "plus.bubble.fill")
                         }
@@ -67,6 +75,7 @@ struct ChatView: View {
             }
             .task {
                 await viewModel.loadOrCreateConversation()
+                requestScrollToBottom()
             }
             .scrollDismissesKeyboard(.interactively)
             .onTapGesture {
@@ -92,7 +101,7 @@ struct ChatView: View {
             .photosPicker(
                 isPresented: $showFullGallery,
                 selection: $selectedItems,
-                maxSelectionCount: nil,
+                maxSelectionCount: 8,
                 matching: .images
             )
             .onChange(of: selectedItems) { _, newItems in
@@ -103,11 +112,24 @@ struct ChatView: View {
             }
             .confirmationDialog("Limpiar el chat?", isPresented: $showClearConfirm) {
                 Button("Limpiar", role: .destructive) {
-                    viewModel.clearConversation()
+                    clearConversation()
                 }
                 Button("Cancelar", role: .cancel) {}
             } message: {
                 Text("Se borraran los mensajes de esta conversacion en pantalla. La conversacion seguira existiendo en la base de datos.")
+            }
+            .onDisappear {
+                recordingTask?.cancel()
+                recordingTask = nil
+                if audioRecorder.isRecording || audioRecorder.isRequestingPermission {
+                    audioRecorder.cancelRecording()
+                }
+                audioPlayback.stop()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active && (audioRecorder.isRecording || audioRecorder.isRequestingPermission) {
+                    cancelAudioRecording()
+                }
             }
         }
     }
@@ -164,54 +186,121 @@ struct ChatView: View {
     // MARK: - Messages list
 
     private var messagesList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    if let err = viewModel.errorMessage {
-                        ErrorBanner(message: err) {
-                            viewModel.errorMessage = nil
+        GeometryReader { viewport in
+            ScrollViewReader { proxy in
+                ZStack(alignment: .bottomTrailing) {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            if viewModel.hasMoreHistory || viewModel.isLoadingOlderMessages {
+                                Button {
+                                    loadOlderMessages(using: proxy)
+                                } label: {
+                                    if viewModel.isLoadingOlderMessages {
+                                        ProgressView()
+                                    } else {
+                                        Label("Mensajes anteriores", systemImage: "arrow.up")
+                                            .font(.caption)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                                .padding(.vertical, 10)
+                                .disabled(viewModel.isLoadingOlderMessages)
+                            }
+
+                            if let err = viewModel.errorMessage {
+                                ErrorBanner(message: err) {
+                                    viewModel.errorMessage = nil
+                                }
+                                .padding(.bottom, 8)
+                            }
+                            ForEach(viewModel.messages) { msg in
+                                MessageRow(
+                                    message: msg,
+                                    audioPlayback: audioPlayback,
+                                    onImageTap: { url in fullscreenImageURL = url },
+                                    onSaveMeal: { meal in
+                                        await viewModel.saveMeal(meal)
+                                    }
+                                )
+                                .id(msg.id)
+                                .transition(.asymmetric(
+                                    insertion: .scale(scale: 0.95).combined(with: .opacity),
+                                    removal: .opacity
+                                ))
+                            }
+
+                            Color.clear
+                                .frame(height: 1)
+                                .id(bottomAnchorId)
+                                .background {
+                                    GeometryReader { marker in
+                                        Color.clear.preference(
+                                            key: ChatBottomPositionPreferenceKey.self,
+                                            value: marker.frame(in: .named("chat-scroll")).maxY
+                                        )
+                                    }
+                                }
                         }
-                        .padding(.bottom, 8)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
                     }
-                    ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, msg in
-                        MessageRow(
-                            message: msg,
-                            isLastAssistant: isLastAssistant(index: index),
-                            onImageTap: { url in fullscreenImageURL = url },
-                            onSaveMeal: { meal in
-                                await viewModel.saveMeal(meal)
-                            },
-                            onRegenerate: isLastAssistant(index: index) ? {
-                                Task { await viewModel.regenerateLastResponse() }
-                            } : nil
-                        )
-                        .id(msg.id)
-                        .transition(.asymmetric(
-                            insertion: .scale(scale: 0.95).combined(with: .opacity),
-                            removal: .opacity
-                        ))
-                    }
-                    // Indicador de thinking al final
-                    if viewModel.isAgentThinking && (viewModel.messages.last?.content.isEmpty ?? true) {
-                        ThinkingIndicator()
-                            .padding(10)
-                            .transition(.scale(scale: 0.9).combined(with: .opacity))
+                    .coordinateSpace(name: "chat-scroll")
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 4)
+                            .onChanged { value in
+                                isUserScrolling = true
+                                if value.translation.height > 8 {
+                                    isPinnedToBottom = false
+                                }
+                            }
+                            .onEnded { _ in
+                                isUserScrolling = false
+                                updatePinnedState(viewportHeight: viewport.size.height)
+                            }
+                    )
+
+                    if !isPinnedToBottom {
+                        Button {
+                            isPinnedToBottom = true
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+                            }
+                        } label: {
+                            Image(systemName: "arrow.down")
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(width: 38, height: 38)
+                                .background(.regularMaterial, in: Circle())
+                                .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Ir al final del chat")
+                        .padding(12)
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-            }
-            .scrollTargetLayout()
-            .onChange(of: viewModel.messages.count) { _, _ in
-                if let lastId = viewModel.messages.last?.id {
-                    withAnimation(.smooth(duration: 0.3)) {
-                        proxy.scrollTo(lastId, anchor: .bottom)
+                .onPreferenceChange(ChatBottomPositionPreferenceKey.self) { bottomY in
+                    bottomDistance = bottomY - viewport.size.height
+                    updatePinnedState(viewportHeight: viewport.size.height)
+                }
+                .onChange(of: scrollToBottomRequest) { _, _ in
+                    isPinnedToBottom = true
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(bottomAnchorId, anchor: .bottom)
                     }
                 }
-            }
-            .onChange(of: viewModel.messages.last?.content) { _, _ in
-                if let lastId = viewModel.messages.last?.id {
-                    proxy.scrollTo(lastId, anchor: .bottom)
+                .onChange(of: viewModel.messages.last?.id) { _, _ in
+                    guard isPinnedToBottom else { return }
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+                    }
+                }
+                .task(id: viewModel.isAgentThinking) {
+                    while viewModel.isAgentThinking && !Task.isCancelled {
+                        if isPinnedToBottom && !isUserScrolling {
+                            proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+                        }
+                        try? await Task.sleep(nanoseconds: 90_000_000)
+                    }
                 }
             }
         }
@@ -230,13 +319,45 @@ struct ChatView: View {
                 .padding(.top, 8)
             }
 
+            if let recording = audioRecorder.recordedAudio {
+                AudioAttachmentCard(
+                    id: recording.id,
+                    title: "Grabación de voz",
+                    duration: recording.duration,
+                    sizeBytes: recording.sizeBytes,
+                    localURL: recording.fileURL,
+                    onRemove: {
+                        audioPlayback.stop()
+                        audioRecorder.discardRecordedAudio()
+                    },
+                    playback: audioPlayback
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+            }
+
+            if let audioError = audioRecorder.errorMessage {
+                ErrorBanner(message: audioError) {
+                    audioRecorder.errorMessage = nil
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+            }
+
+            if let playbackError = audioPlayback.errorMessage {
+                ErrorBanner(message: playbackError) {
+                    audioPlayback.errorMessage = nil
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+            }
+
             // Barra de entrada estilo Claude
             ChatInputBar(
                 text: $inputText,
                 placeholder: inputPlaceholder,
-                isAgentThinking: viewModel.isAgentThinking,
-                isRecordingAudio: isRecordingAudio,
-                hasReadyAudio: audioRecorder.audioData != nil,
+                isAgentThinking: viewModel.isAgentThinking || viewModel.isSending || audioRecorder.isRequestingPermission,
+                isRecordingAudio: audioRecorder.isRecording,
                 hasAttachments: !viewModel.pendingAttachments.isEmpty,
                 recorder: audioRecorder,
                 onPlusTap: {
@@ -247,26 +368,18 @@ struct ChatView: View {
                     }
                 },
                 onMicTap: {
-                    if hasReadyAudio {
-                        // Descartar audio anterior y grabar uno nuevo
-                        audioRecorder.audioData = nil
-                        startAudioRecording()
-                    } else if isRecordingAudio {
+                    if audioRecorder.isRecording {
                         Task { await stopAudioRecording() }
                     } else {
-                        startAudioRecording()
+                        recordingTask?.cancel()
+                        recordingTask = Task { await startAudioRecording() }
                     }
                 },
                 onCancelRecording: {
                     cancelAudioRecording()
                 },
                 onSend: {
-                    Task {
-                        if isRecordingAudio {
-                            await stopAudioRecording()
-                        }
-                        await send()
-                    }
+                    Task { await send() }
                 },
                 isFocused: $inputFocused
             )
@@ -274,20 +387,8 @@ struct ChatView: View {
         .background(Color(red: 0.10, green: 0.10, blue: 0.10))
         .animation(.easeInOut(duration: 0.2), value: viewModel.pendingAttachments.count)
         .animation(.easeInOut(duration: 0.2), value: viewModel.isAgentThinking)
-        .animation(.easeInOut(duration: 0.2), value: isRecordingAudio)
-        .animation(.easeInOut(duration: 0.2), value: audioRecorder.audioData != nil)
-        // Sincronizar isRecordingAudio con el estado real del recorder.
-        // El recorder puede pararse solo al llegar al límite de 3 min;
-        // en ese caso isRecordingAudio (State local) debe refrescarse.
-        .onChange(of: audioRecorder.isRecording) { _, newValue in
-            if !newValue && isRecordingAudio {
-                isRecordingAudio = false
-            }
-        }
-    }
-
-    private var hasReadyAudio: Bool {
-        audioRecorder.audioData != nil
+        .animation(.easeInOut(duration: 0.2), value: audioRecorder.isRecording)
+        .animation(.easeInOut(duration: 0.2), value: audioRecorder.recordedAudio != nil)
     }
 
     private var inputPlaceholder: String {
@@ -296,17 +397,28 @@ struct ChatView: View {
 
     private func send() async {
         let text = inputText
-        inputText = ""
-        inputFocused = false
-        let audioData = audioRecorder.audioData
         let useWebSearch = webSearchEnabled
-        await viewModel.send(text: text, audioData: audioData, webSearch: useWebSearch)
-        audioRecorder.audioData = nil
+        let sent = await viewModel.send(
+            text: text,
+            recordedAudio: audioRecorder.recordedAudio,
+            webSearch: useWebSearch
+        )
+        if sent {
+            inputText = ""
+            inputFocused = false
+            audioPlayback.stop()
+            audioRecorder.discardRecordedAudio()
+            requestScrollToBottom()
+        }
     }
 
     // MARK: - Imagen desde cámara
 
     private func addCameraImage(_ image: UIImage) {
+        guard viewModel.pendingAttachments.count < 8 else {
+            viewModel.errorMessage = "Puedes adjuntar hasta ocho archivos."
+            return
+        }
         guard let data = image.jpegData(compressionQuality: 0.85) else { return }
         let compressed = compressImageData(data, maxBytes: 2 * 1024 * 1024) ?? data
         guard let preview = UIImage(data: compressed) else { return }
@@ -318,6 +430,10 @@ struct ChatView: View {
     // MARK: - Imagen desde galería reciente (PHAsset)
 
     private func addRecentPhoto(_ asset: PHAsset) async {
+        guard viewModel.pendingAttachments.count < 8 else {
+            viewModel.errorMessage = "Puedes adjuntar hasta ocho archivos."
+            return
+        }
         guard let data = await photoLibrary.fetchFullImageData(for: asset) else { return }
         let compressed = compressImageData(data, maxBytes: 2 * 1024 * 1024) ?? data
         guard let preview = UIImage(data: compressed) else { return }
@@ -341,61 +457,69 @@ struct ChatView: View {
 
     // MARK: - Audio recording
 
-    private func startAudioRecording() {
-        audioRecorder.startRecording()
-        isRecordingAudio = true
+    private func startAudioRecording() async {
+        audioPlayback.stop()
+        await audioRecorder.startRecording()
     }
 
     private func stopAudioRecording() async {
         await audioRecorder.stopRecording()
-        isRecordingAudio = false
+        recordingTask = nil
     }
 
     private func cancelAudioRecording() {
+        recordingTask?.cancel()
+        recordingTask = nil
         audioRecorder.cancelRecording()
-        isRecordingAudio = false
     }
 
-    private func isLastAssistant(index: Int) -> Bool {
-        let msgs = viewModel.messages
-        guard index < msgs.count else { return false }
-        guard msgs[index].role == .assistant else { return false }
-        guard !msgs[index].isStreaming else { return false }
-        for i in (index + 1)..<msgs.count {
-            if msgs[i].role == .assistant && !msgs[i].isStreaming {
-                return false
-            }
+    private func startNewConversation() async {
+        cancelAudioDraft()
+        await viewModel.newConversation()
+        requestScrollToBottom()
+    }
+
+    private func clearConversation() {
+        cancelAudioDraft()
+        viewModel.clearConversation()
+        requestScrollToBottom()
+    }
+
+    private func cancelAudioDraft() {
+        recordingTask?.cancel()
+        recordingTask = nil
+        audioPlayback.stop()
+        audioRecorder.cancelRecording()
+        audioRecorder.discardRecordedAudio()
+    }
+
+    private func requestScrollToBottom() {
+        scrollToBottomRequest += 1
+    }
+
+    private func updatePinnedState(viewportHeight: CGFloat) {
+        guard viewportHeight > 0 else { return }
+        if bottomDistance <= 72 {
+            isPinnedToBottom = true
+        } else if isUserScrolling {
+            isPinnedToBottom = false
         }
-        return true
+    }
+
+    private func loadOlderMessages(using proxy: ScrollViewProxy) {
+        guard let anchorId = viewModel.messages.first?.id else { return }
+        Task {
+            await viewModel.loadOlderMessages()
+            await Task.yield()
+            proxy.scrollTo(anchorId, anchor: .top)
+        }
     }
 }
 
-// MARK: - Thinking indicator (3 puntos saltantes estilo iMessage)
-
-struct ThinkingIndicator: View {
-    @State private var phase: CGFloat = 0
-
-    var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<3, id: \.self) { i in
-                Circle()
-                    .fill(Color.secondary.opacity(0.6))
-                    .frame(width: 7, height: 7)
-                    .scaleEffect(phase == CGFloat(i) ? 1.3 : 0.7)
-                    .offset(y: phase == CGFloat(i) ? -5 : 0)
-                    .animation(
-                        .spring(duration: 0.5, bounce: 0.6)
-                            .delay(Double(i) * 0.12),
-                        value: phase
-                    )
-            }
-        }
-        .frame(height: 20)
-        .onAppear {
-            withAnimation(.spring(duration: 0.5, bounce: 0.6).repeatForever()) {
-                phase = 3
-            }
-        }
+private struct ChatBottomPositionPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
