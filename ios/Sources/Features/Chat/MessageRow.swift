@@ -112,8 +112,8 @@ private struct StreamingAssistantContent: View {
     let onSaveMeal: (PendingMeal) async -> Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @StateObject private var animator: StreamingTextAnimator
-    @State private var appearingOpacity = 1.0
+    @State private var hasCompleted: Bool
+    @State private var streamingHeight: CGFloat = 1
 
     init(
         text: String,
@@ -123,69 +123,25 @@ private struct StreamingAssistantContent: View {
         self.text = text
         self.isStreaming = isStreaming
         self.onSaveMeal = onSaveMeal
-        _animator = StateObject(
-            wrappedValue: StreamingTextAnimator(text: text, isStreaming: isStreaming)
-        )
+        _hasCompleted = State(initialValue: !isStreaming)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if animator.frame.isComplete {
+            if hasCompleted {
                 completedContent
             } else {
-                (Text(animator.frame.stableText) +
-                 Text(animator.frame.appearingText)
-                    .foregroundColor(Color.primary.opacity(appearingOpacity)))
-                    .font(.body)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            }
-        }
-        .onAppear {
-            animator.update(
-                text: text,
-                isStreaming: isStreaming,
-                reduceMotion: reduceMotion
-            )
-        }
-        .onDisappear {
-            animator.pause()
-        }
-        .onChange(of: text) { _, newText in
-            animator.update(
-                text: newText,
-                isStreaming: isStreaming,
-                reduceMotion: reduceMotion
-            )
-        }
-        .onChange(of: isStreaming) { _, streaming in
-            animator.update(
-                text: text,
-                isStreaming: streaming,
-                reduceMotion: reduceMotion
-            )
-        }
-        .onChange(of: reduceMotion) { _, reduced in
-            animator.update(
-                text: text,
-                isStreaming: isStreaming,
-                reduceMotion: reduced
-            )
-        }
-        .onChange(of: animator.frame.revision) { _, _ in
-            guard !animator.frame.appearingText.isEmpty else { return }
-            let revision = animator.frame.revision
-            var transaction = Transaction(animation: nil)
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                appearingOpacity = 0.25
-            }
-            DispatchQueue.main.async {
-                guard animator.frame.revision == revision else { return }
-                withAnimation(.easeOut(duration: 0.06)) {
-                    appearingOpacity = 1
-                }
+                StreamingTextView(
+                    text: text,
+                    isStreaming: isStreaming,
+                    reduceMotion: reduceMotion,
+                    measuredHeight: $streamingHeight,
+                    onFinished: {
+                        hasCompleted = true
+                    }
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: streamingHeight)
             }
         }
     }

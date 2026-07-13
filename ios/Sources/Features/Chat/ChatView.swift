@@ -29,8 +29,12 @@ struct ChatView: View {
     @State private var shouldFollowResponse = true
     @State private var isUserScrolling = false
     @State private var bottomDistance = CGFloat.greatestFiniteMagnitude
+    @State private var bottomContentSpacing: CGFloat = 72
     @State private var scrollToBottomRequest = 0
     @State private var recordingTask: Task<Void, Never>?
+
+    private let bottomAnchorId = "chat-bottom-anchor"
+    private let responseFollowSpacing: CGFloat = 72
 
     var body: some View {
         NavigationStack {
@@ -228,7 +232,8 @@ struct ChatView: View {
                             }
 
                             Color.clear
-                                .frame(height: 12)
+                                .frame(height: bottomContentSpacing)
+                                .id(bottomAnchorId)
                                 .background {
                                     GeometryReader { marker in
                                         Color.clear.preference(
@@ -239,7 +244,7 @@ struct ChatView: View {
                                 }
                         }
                         .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
+                        .padding(.top, 12)
                     }
                     .coordinateSpace(name: "chat-scroll")
                     .onTapGesture {
@@ -254,8 +259,8 @@ struct ChatView: View {
                             .onEnded { _ in
                                 isUserScrolling = false
                                 updatePinnedState()
-                                if !viewModel.isAgentThinking && isPinnedToBottom {
-                                    shouldFollowResponse = true
+                                withAnimation(.easeOut(duration: 0.15)) {
+                                    bottomContentSpacing = 12
                                 }
                             }
                     )
@@ -264,10 +269,9 @@ struct ChatView: View {
                         Button {
                             shouldFollowResponse = true
                             isPinnedToBottom = true
-                            if let lastMessageId = viewModel.messages.last?.id {
-                                withAnimation(.easeOut(duration: 0.2)) {
-                                    proxy.scrollTo(lastMessageId, anchor: .bottom)
-                                }
+                            bottomContentSpacing = responseFollowSpacing
+                            DispatchQueue.main.async {
+                                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
                             }
                         } label: {
                             Image(systemName: "arrow.down")
@@ -286,26 +290,25 @@ struct ChatView: View {
                     updatePinnedState()
                     if shouldFollowResponse,
                        !isUserScrolling,
-                       bottomDistance > 0,
-                       let lastMessageId = viewModel.messages.last?.id {
+                       bottomDistance > 0 {
                         DispatchQueue.main.async {
-                            proxy.scrollTo(lastMessageId, anchor: .bottom)
+                            proxy.scrollTo(bottomAnchorId, anchor: .bottom)
                         }
                     }
                 }
                 .onChange(of: scrollToBottomRequest) { _, _ in
                     shouldFollowResponse = true
                     isPinnedToBottom = true
-                    if let lastMessageId = viewModel.messages.last?.id {
-                        DispatchQueue.main.async {
-                            proxy.scrollTo(lastMessageId, anchor: .bottom)
-                        }
+                    bottomContentSpacing = responseFollowSpacing
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(bottomAnchorId, anchor: .bottom)
                     }
                 }
-                .onChange(of: viewModel.messages.last?.id) { _, lastMessageId in
-                    guard shouldFollowResponse, let lastMessageId else { return }
+                .onChange(of: viewModel.messages.last?.id) { _, _ in
+                    guard shouldFollowResponse else { return }
+                    bottomContentSpacing = responseFollowSpacing
                     DispatchQueue.main.async {
-                        proxy.scrollTo(lastMessageId, anchor: .bottom)
+                        proxy.scrollTo(bottomAnchorId, anchor: .bottom)
                     }
                 }
             }
