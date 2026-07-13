@@ -34,6 +34,7 @@ struct ChatView: View {
     @State private var bottomDistance = CGFloat.greatestFiniteMagnitude
     @State private var bottomContentSpacing: CGFloat = 72
     @State private var scrollToBottomRequest = 0
+    @State private var animatedFollowRequestID: Int?
     @State private var manualScrollGeneration = 0
     @State private var recordingTask: Task<Void, Never>?
 
@@ -270,6 +271,7 @@ struct ChatView: View {
                                 isUserScrolling = true
                                 shouldFollowResponse = false
                                 isFollowScrollPending = false
+                                animatedFollowRequestID = nil
                                 isSeekingLatestMessage = value.translation.height < -4
                                 inputFocused = false
                             }
@@ -290,7 +292,7 @@ struct ChatView: View {
                     if !isSettlingSentMessage &&
                        (isFollowScrollPending || !shouldFollowResponse || !isPinnedToBottom) {
                         Button {
-                            requestFollowScroll(keepButtonVisible: true)
+                            requestFollowScroll(keepButtonVisible: true, animated: true)
                         } label: {
                             Image(systemName: "arrow.down")
                                 .font(.system(size: 15, weight: .semibold))
@@ -326,6 +328,7 @@ struct ChatView: View {
                     }
 
                     if shouldFollowResponse,
+                       animatedFollowRequestID == nil,
                        !isUserScrolling,
                        distance > 0 {
                         scheduleAutomaticFollow(using: proxy)
@@ -551,16 +554,20 @@ struct ChatView: View {
         audioRecorder.discardRecordedAudio()
     }
 
-    private func requestScrollToBottom() {
+    private func requestScrollToBottom(animated: Bool = false) {
         scrollToBottomRequest += 1
+        animatedFollowRequestID = animated ? scrollToBottomRequest : nil
     }
 
-    private func requestFollowScroll(keepButtonVisible: Bool = false) {
+    private func requestFollowScroll(
+        keepButtonVisible: Bool = false,
+        animated: Bool = false
+    ) {
         shouldFollowResponse = true
         isSeekingLatestMessage = false
         isFollowScrollPending = keepButtonVisible
         bottomContentSpacing = responseFollowSpacing
-        requestScrollToBottom()
+        requestScrollToBottom(animated: animated)
     }
 
     private func scheduleRequestedFollow(using proxy: ScrollViewProxy, requestID: Int) {
@@ -568,7 +575,18 @@ struct ChatView: View {
             guard scrollToBottomRequest == requestID,
                   shouldFollowResponse,
                   !isUserScrolling else { return }
-            proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+            if animatedFollowRequestID == requestID {
+                withAnimation(.smooth(duration: 0.5)) {
+                    proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.52) {
+                    guard animatedFollowRequestID == requestID else { return }
+                    animatedFollowRequestID = nil
+                    isFollowScrollPending = false
+                }
+            } else {
+                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+            }
         }
     }
 
