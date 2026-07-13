@@ -371,14 +371,26 @@ final class HealthKitManager: ObservableObject {
         try await readTodayValue(id: .activeEnergyBurned, strategy: .sum)
     }
 
-    /// Lee el sueno de la ultima noche directamente de HealthKit.
-    /// Devuelve minutos totales de sueno real (excluyendo inBed y awake).
-    /// Ventana: desde hace 12 horas hasta ahora (cubre una noche tipica).
-    /// Usa el mismo filtro que querySleep: solo allAsleepValues.
-    func querySleepForLastNight(from start: Date, to end: Date) async throws -> Double {
+    /// Lee la ultima noche en una ventana estable de mediodia a mediodia.
+    /// Esto evita que abrir el Dashboard por la tarde recorte el inicio del sueno.
+    func querySleepForLastNight(referenceDate: Date = Date()) async throws -> Double {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: referenceDate)
+        guard let todayNoon = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: today),
+              let previousNoon = calendar.date(byAdding: .day, value: -1, to: todayNoon) else {
+            return 0
+        }
+        let windowEnd = min(referenceDate, todayNoon)
+        return Double(try await querySleepMinutes(from: previousNoon, to: windowEnd))
+    }
+
+    private func querySleepMinutes(from start: Date, to end: Date) async throws -> Int {
+        guard end > start else { return 0 }
         guard let type = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else { return 0 }
 
-        let dateRangePredicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        // Sin strictStartDate: HealthKit devuelve tambien las fases que solapan
+        // el inicio de la ventana. Despues las recortamos exactamente al rango.
+        let dateRangePredicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
         let asleepPredicate = HKCategoryValueSleepAnalysis.predicateForSamples(equalTo: HKCategoryValueSleepAnalysis.allAsleepValues)
         let compoundPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [dateRangePredicate, asleepPredicate])
 
@@ -404,11 +416,32 @@ final class HealthKitManager: ObservableObject {
             store.execute(query)
         }
 
-        var total: TimeInterval = 0
-        for sample in samples {
-            total += sample.endDate.timeIntervalSince(sample.startDate)
+        let intervals = samples.compactMap { sample -> DateInterval? in
+            let clippedStart = max(sample.startDate, start)
+            let clippedEnd = min(sample.endDate, end)
+            guard clippedEnd > clippedStart else { return nil }
+            return DateInterval(start: clippedStart, end: clippedEnd)
         }
-        return Double(Int(total / 60))  // minutos
+        .sorted { $0.start < $1.start }
+
+        var merged: [DateInterval] = []
+        for interval in intervals {
+            guard let last = merged.last else {
+                merged.append(interval)
+                continue
+            }
+            if interval.start <= last.end {
+                merged[merged.count - 1] = DateInterval(
+                    start: last.start,
+                    end: max(last.end, interval.end)
+                )
+            } else {
+                merged.append(interval)
+            }
+        }
+
+        let seconds = merged.reduce(0.0) { $0 + $1.duration }
+        return Int((seconds / 60).rounded())
     }
 
     /// Lee pasos Y calorias activas de los ultimos 7 dias directamente de HealthKit.
@@ -668,66 +701,28 @@ final class HealthKitManager: ObservableObject {
     }
 
     private func querySleep(from start: Date, to end: Date) async throws -> [HealthMetricPayload] {
-        guard let type = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else { return [] }
         let calendar = Calendar.current
         var current = calendar.startOfDay(for: start)
         let endDay = calendar.startOfDay(for: end)
         var results: [HealthMetricPayload] = []
 
         while current <= endDay {
-            let dayEnd = calendar.date(byAdding: .day, value: 1, to: current) ?? current
-            let dateRangePredicate = HKQuery.predicateForSamples(withStart: current, end: dayEnd, options: .strictStartDate)
-
-            // Filtrar solo fases de sueno real (excluir inBed y awake).
-            // HKCategoryValueSleepAnalysis.allAsleepValues incluye:
-            //   .asleepUnspecified, .asleepCore, .asleepDeep, .asleepREM
-            // Excluye .inBed (tiempo en la cama sin dormir) y .awake (despierto).
-            // Sin este filtro, el total incluia el tiempo en la cama antes de
-            // dormirse, inflando el resultado (ej: 8h en cama != 7h durmiendo).
-            let asleepPredicate = HKCategoryValueSleepAnalysis.predicateForSamples(equalTo: HKCategoryValueSleepAnalysis.allAsleepValues)
-            let compoundPredicate = NSCompoundPredicate(andPredicateWithSubpredicates: [dateRangePredicate, asleepPredicate])
-
-            let daySamples: [HKCategorySample] = try await withCheckedThrowingContinuation { continuation in
-                let query = HKSampleQuery(
-                    sampleType: type,
-                    predicate: compoundPredicate,
-                    limit: HKObjectQueryNoLimit,
-                    sortDescriptors: nil
-                ) { _, samples, error in
-                    if let error = error {
-                        let nsError = error as NSError
-                        if nsError.domain == HKError.errorDomain,
-                           nsError.code == HKError.Code.errorNoData.rawValue {
-                            continuation.resume(returning: [])
-                        } else {
-                            continuation.resume(throwing: error)
-                        }
-                        return
-                    }
-                    continuation.resume(returning: (samples as? [HKCategorySample]) ?? [])
-                }
-                store.execute(query)
+            guard let noon = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: current),
+                  let previousNoon = calendar.date(byAdding: .day, value: -1, to: noon) else {
+                break
             }
-
-            // Los samples ya estan filtrados por el predicate a solo fases asleep.
-            // Sumamos las duraciones. Si hay solapamiento entre fases (raro pero
-            // posible si el Watch registra core y deep simultaneamente), la suma
-            // puede ser ligeramente mayor al tiempo real en la cama. Aceptable
-            // para mostrar horas de sueno total.
-            var total: TimeInterval = 0
-            for sample in daySamples {
-                total += sample.endDate.timeIntervalSince(sample.startDate)
-            }
-            if total > 0 {
+            let windowEnd = current == endDay ? min(end, noon) : noon
+            let minutes = try await querySleepMinutes(from: previousNoon, to: windowEnd)
+            if minutes > 0 {
                 let recordedAt = ISO8601DateFormatter().string(from: current)
                 results.append(HealthMetricPayload(
                     type: "sleep_minutes",
-                    value: Double(Int(total / 60)),
+                    value: Double(minutes),
                     unit: "minutes",
                     recorded_at: recordedAt
                 ))
             }
-            current = dayEnd
+            current = calendar.date(byAdding: .day, value: 1, to: current) ?? endDay.addingTimeInterval(1)
         }
         return results
     }

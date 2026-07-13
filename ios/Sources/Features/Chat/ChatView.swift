@@ -32,8 +32,6 @@ struct ChatView: View {
     @State private var scrollToBottomRequest = 0
     @State private var recordingTask: Task<Void, Never>?
 
-    private let bottomAnchorId = "chat-bottom-anchor"
-
     var body: some View {
         NavigationStack {
             ZStack {
@@ -80,9 +78,6 @@ struct ChatView: View {
                 requestScrollToBottom()
             }
             .scrollDismissesKeyboard(.interactively)
-            .onTapGesture {
-                inputFocused = false
-            }
             .sheet(item: Binding(
                 get: { fullscreenImageURL.map { ImageViewerID(url: $0) } },
                 set: { fullscreenImageURL = $0?.url }
@@ -233,8 +228,7 @@ struct ChatView: View {
                             }
 
                             Color.clear
-                                .frame(height: 1)
-                                .id(bottomAnchorId)
+                                .frame(height: 12)
                                 .background {
                                     GeometryReader { marker in
                                         Color.clear.preference(
@@ -248,6 +242,9 @@ struct ChatView: View {
                         .padding(.vertical, 12)
                     }
                     .coordinateSpace(name: "chat-scroll")
+                    .onTapGesture {
+                        inputFocused = false
+                    }
                     .simultaneousGesture(
                         DragGesture(minimumDistance: 4)
                             .onChanged { _ in
@@ -267,8 +264,10 @@ struct ChatView: View {
                         Button {
                             shouldFollowResponse = true
                             isPinnedToBottom = true
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+                            if let lastMessageId = viewModel.messages.last?.id {
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    proxy.scrollTo(lastMessageId, anchor: .bottom)
+                                }
                             }
                         } label: {
                             Image(systemName: "arrow.down")
@@ -289,22 +288,24 @@ struct ChatView: View {
                 .onChange(of: scrollToBottomRequest) { _, _ in
                     shouldFollowResponse = true
                     isPinnedToBottom = true
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(bottomAnchorId, anchor: .bottom)
-                    }
-                }
-                .onChange(of: viewModel.messages.last?.id) { _, _ in
-                    guard shouldFollowResponse else { return }
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(bottomAnchorId, anchor: .bottom)
-                    }
-                }
-                .task(id: viewModel.isAgentThinking) {
-                    while viewModel.isAgentThinking && !Task.isCancelled {
-                        if shouldFollowResponse && !isUserScrolling {
-                            proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+                    if let lastMessageId = viewModel.messages.last?.id {
+                        DispatchQueue.main.async {
+                            proxy.scrollTo(lastMessageId, anchor: .bottom)
                         }
-                        try? await Task.sleep(nanoseconds: 90_000_000)
+                    }
+                }
+                .onChange(of: viewModel.messages.last?.id) { _, lastMessageId in
+                    guard shouldFollowResponse, let lastMessageId else { return }
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(lastMessageId, anchor: .bottom)
+                    }
+                }
+                .onChange(of: streamingRevision) { _, revision in
+                    guard shouldFollowResponse,
+                          !isUserScrolling,
+                          let messageId = revision.messageId else { return }
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(messageId, anchor: .bottom)
                     }
                 }
             }
@@ -400,6 +401,8 @@ struct ChatView: View {
     }
 
     private func send() async {
+        showPlusMenu = false
+        shouldFollowResponse = true
         let text = inputText
         let useWebSearch = webSearchEnabled
         let sent = await viewModel.send(
@@ -409,10 +412,8 @@ struct ChatView: View {
         )
         if sent {
             inputText = ""
-            inputFocused = false
             audioPlayback.stop()
             audioRecorder.discardRecordedAudio()
-            requestScrollToBottom()
         }
     }
 
@@ -505,6 +506,27 @@ struct ChatView: View {
         isPinnedToBottom = bottomDistance <= 72
     }
 
+    private var streamingRevision: StreamingRevision {
+        guard let message = viewModel.messages.last,
+              message.role == .assistant,
+              message.isStreaming else {
+            return StreamingRevision(messageId: nil, visibleLength: 0)
+        }
+        let toolsLength = message.toolStatus?.reduce(0) { partial, tool in
+            partial + tool.name.count + tool.summary.count
+        } ?? 0
+        // El razonamiento permanece colapsado durante el streaming y no cambia
+        // la altura visible, por lo que no debe disparar desplazamientos.
+        let visibleLength = message.content.count + toolsLength
+        guard visibleLength > 0 else {
+            return StreamingRevision(messageId: nil, visibleLength: 0)
+        }
+        return StreamingRevision(
+            messageId: message.id,
+            visibleLength: visibleLength
+        )
+    }
+
     private func loadOlderMessages(using proxy: ScrollViewProxy) {
         guard let anchorId = viewModel.messages.first?.id else { return }
         Task {
@@ -520,6 +542,11 @@ private struct ChatBottomPositionPreferenceKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }
+}
+
+private struct StreamingRevision: Equatable {
+    let messageId: UUID?
+    let visibleLength: Int
 }
 
 // MARK: - Wrapper Identifiable para .sheet(item:) con un String.

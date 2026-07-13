@@ -5,51 +5,56 @@ struct NutriGrowthIndicator: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Group {
-            if isActive && !reduceMotion {
-                PhaseAnimator([0, 1, 2, 3]) { phase in
-                    sprout(phase: phase)
-                } animation: { phase in
-                    if phase == 1 || phase == 2 {
-                        return .easeOut(duration: 0.32)
-                    }
-                    return .easeInOut(duration: 0.38)
-                }
-            } else {
-                sprout(phase: 3)
+        if isActive && !reduceMotion {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                let elapsed = timeline.date.timeIntervalSinceReferenceDate
+                nutritionPlate(
+                    rotation: .degrees(elapsed.truncatingRemainder(dividingBy: 1.8) / 1.8 * 360),
+                    pulse: 1 + sin(elapsed * 4) * 0.035
+                )
             }
+        } else {
+            nutritionPlate(rotation: .zero, pulse: 1)
         }
-        .frame(width: 30, height: 34)
-        .accessibilityHidden(true)
     }
 
-    private func sprout(phase: Int) -> some View {
-        ZStack {
-            Capsule()
-                .fill(Color.green)
-                .frame(width: 3, height: 17)
-                .scaleEffect(y: phase == 0 ? 0.35 : 1, anchor: .bottom)
-                .offset(y: 6)
+    private func nutritionPlate(rotation: Angle, pulse: CGFloat) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Circle()
+                .fill(Color.green.opacity(0.1))
+                .overlay {
+                    Circle()
+                        .stroke(Color.green.opacity(0.28), lineWidth: 1)
+                }
 
-            Capsule()
-                .fill(Color.green.opacity(0.85))
-                .frame(width: 11, height: 6)
-                .rotationEffect(.degrees(-32), anchor: .trailing)
-                .scaleEffect(phase >= 2 ? 1 : 0.2, anchor: .trailing)
-                .offset(x: -5, y: -1)
+            Image(systemName: "fork.knife")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.green)
 
-            Capsule()
-                .fill(Color.teal.opacity(0.9))
-                .frame(width: 11, height: 6)
-                .rotationEffect(.degrees(32), anchor: .leading)
-                .scaleEffect(phase >= 3 ? 1 : 0.2, anchor: .leading)
-                .offset(x: 5, y: -5)
+            if isActive {
+                Circle()
+                    .trim(from: 0, to: 0.24)
+                    .stroke(
+                        Color.orange,
+                        style: StrokeStyle(lineWidth: 2.2, lineCap: .round)
+                    )
+                    .rotationEffect(rotation)
+                    .padding(1)
+            } else {
+                Circle()
+                    .stroke(Color.orange.opacity(0.45), lineWidth: 1.5)
+                    .padding(2)
+            }
 
-            Capsule()
-                .fill(Color.orange)
-                .frame(width: 3, height: 5)
-                .offset(y: phase == 0 ? 11 : -6)
-                .opacity(isActive ? 0.9 : 0)
+            Image(systemName: "leaf.fill")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 13, height: 13)
+                .background(Color.green, in: Circle())
+                .offset(x: 3, y: -3)
         }
+        .scaleEffect(pulse)
+        .frame(width: 34, height: 34)
+        .accessibilityHidden(true)
     }
 }

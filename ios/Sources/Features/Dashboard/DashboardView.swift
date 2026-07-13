@@ -288,9 +288,8 @@ struct DashboardView: View {
     }
 
     private func formatHours(_ hours: Double) -> String {
-        let h = Int(hours)
-        let m = Int((hours - Double(h)) * 60)
-        return "\(h)h \(m)m"
+        let totalMinutes = Int((hours * 60).rounded())
+        return "\(totalMinutes / 60)h \(totalMinutes % 60)m"
     }
 
     private func weekdayLabel(_ index: Int) -> String {
@@ -466,28 +465,27 @@ final class DashboardViewModel: ObservableObject {
                     .first?.value
             }
 
-            // Sueño: HealthKit registra el sueño con startDate=anoche, endDate=hoy.
-            // El recorded_at que guardamos es medianoche del dia de startDate (anoche).
-            // Para mostrar el sueño de "esta noche", buscamos el de hoy + ayer
-            // (la noche que acaba de terminar o esta en curso).
-            let yesterday = calendar.date(byAdding: .day, value: -1, to: now) ?? now
-            let sleepMinutesSupabase = metrics
+            // El sync asigna cada noche al dia local en el que termina.
+            let recentSleepMinutes = metrics
                 .filter { $0.type == "sleep_minutes" }
                 .filter { metric in
                     let date = DateParsing.parse(metric.recordedAt) ?? now
-                    // Matchea si el sueno corresponde a hoy o a ayer (anoche)
+                    let yesterday = calendar.date(byAdding: .day, value: -1, to: now) ?? now
                     return calendar.isDate(date, inSameDayAs: now) ||
                            calendar.isDate(date, inSameDayAs: yesterday)
                 }
-                .reduce(0.0) { $0 + $1.value }
+            let sleepMinutesSupabase = recentSleepMinutes
+                .first(where: { metric in
+                    let date = DateParsing.parse(metric.recordedAt) ?? now
+                    return calendar.isDate(date, inSameDayAs: now)
+                })?.value ?? recentSleepMinutes.map(\.value).max() ?? 0
 
             // Intentar lectura directa de HealthKit para el sueno de anoche.
             // querySleep ahora filtra solo fases asleep (excluye inBed y awake),
             // asi que el valor es mas preciso. Si HealthKit tiene datos, usamos
             // ese valor; si no, fallback a Supabase.
             do {
-                let sleepStart = calendar.date(byAdding: .hour, value: -12, to: now) ?? now
-                let sleepSamples = try await hk.querySleepForLastNight(from: sleepStart, to: now)
+                let sleepSamples = try await hk.querySleepForLastNight(referenceDate: now)
                 if sleepSamples > 0 {
                     self.sleepHours = sleepSamples / 60.0
                 } else if sleepMinutesSupabase > 0 {
