@@ -28,6 +28,8 @@ struct ChatView: View {
     @State private var isPinnedToBottom = true
     @State private var shouldFollowResponse = true
     @State private var isUserScrolling = false
+    @State private var isSeekingLatestMessage = false
+    @State private var isFollowScrollPending = false
     @State private var bottomDistance = CGFloat.greatestFiniteMagnitude
     @State private var bottomContentSpacing: CGFloat = 72
     @State private var scrollToBottomRequest = 0
@@ -35,6 +37,7 @@ struct ChatView: View {
 
     private let bottomAnchorId = "chat-bottom-anchor"
     private let responseFollowSpacing: CGFloat = 72
+    private let followReattachmentThreshold: CGFloat = 96
 
     var body: some View {
         NavigationStack {
@@ -79,7 +82,7 @@ struct ChatView: View {
             }
             .task {
                 await viewModel.loadOrCreateConversation()
-                requestScrollToBottom()
+                requestFollowScroll()
             }
             .scrollDismissesKeyboard(.interactively)
             .sheet(item: Binding(
@@ -130,6 +133,11 @@ struct ChatView: View {
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active && (audioRecorder.isRecording || audioRecorder.isRequestingPermission) {
                     cancelAudioRecording()
+                }
+            }
+            .onChange(of: viewModel.isAgentThinking) { wasThinking, isThinking in
+                if wasThinking && !isThinking {
+                    inputFocused = false
                 }
             }
         }
@@ -252,27 +260,30 @@ struct ChatView: View {
                     }
                     .simultaneousGesture(
                         DragGesture(minimumDistance: 4)
-                            .onChanged { _ in
+                            .onChanged { value in
                                 isUserScrolling = true
                                 shouldFollowResponse = false
+                                isFollowScrollPending = false
+                                isSeekingLatestMessage = value.translation.height < -4
+                                inputFocused = false
                             }
-                            .onEnded { _ in
+                            .onEnded { value in
                                 isUserScrolling = false
-                                updatePinnedState()
-                                withAnimation(.easeOut(duration: 0.15)) {
-                                    bottomContentSpacing = 12
+                                isSeekingLatestMessage = value.translation.height < -4
+                                if isSeekingLatestMessage,
+                                   bottomDistance <= followReattachmentThreshold {
+                                    requestFollowScroll()
+                                } else {
+                                    withAnimation(.easeOut(duration: 0.15)) {
+                                        bottomContentSpacing = 12
+                                    }
                                 }
                             }
                     )
 
-                    if !shouldFollowResponse || !isPinnedToBottom {
+                    if isFollowScrollPending || !shouldFollowResponse || !isPinnedToBottom {
                         Button {
-                            shouldFollowResponse = true
-                            isPinnedToBottom = true
-                            bottomContentSpacing = responseFollowSpacing
-                            DispatchQueue.main.async {
-                                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
-                            }
+                            requestFollowScroll(keepButtonVisible: true)
                         } label: {
                             Image(systemName: "arrow.down")
                                 .font(.system(size: 15, weight: .semibold))
@@ -286,30 +297,38 @@ struct ChatView: View {
                     }
                 }
                 .onPreferenceChange(ChatBottomPositionPreferenceKey.self) { bottomY in
-                    bottomDistance = bottomY - viewport.size.height
-                    updatePinnedState()
+                    let distance = bottomY - viewport.size.height
+                    bottomDistance = distance
+                    isPinnedToBottom = distance <= responseFollowSpacing
+                    if isPinnedToBottom {
+                        isFollowScrollPending = false
+                    }
+
+                    if !shouldFollowResponse,
+                       !isUserScrolling,
+                       isSeekingLatestMessage,
+                       distance <= followReattachmentThreshold {
+                        DispatchQueue.main.async {
+                            guard !shouldFollowResponse,
+                                  !isUserScrolling,
+                                  isSeekingLatestMessage else { return }
+                            requestFollowScroll()
+                        }
+                        return
+                    }
+
                     if shouldFollowResponse,
                        !isUserScrolling,
-                       bottomDistance > 0 {
-                        DispatchQueue.main.async {
-                            proxy.scrollTo(bottomAnchorId, anchor: .bottom)
-                        }
+                       distance > 0 {
+                        scheduleAutomaticFollow(using: proxy)
                     }
                 }
-                .onChange(of: scrollToBottomRequest) { _, _ in
-                    shouldFollowResponse = true
-                    isPinnedToBottom = true
-                    bottomContentSpacing = responseFollowSpacing
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(bottomAnchorId, anchor: .bottom)
-                    }
+                .onChange(of: scrollToBottomRequest) { _, requestID in
+                    scheduleRequestedFollow(using: proxy, requestID: requestID)
                 }
                 .onChange(of: viewModel.messages.last?.id) { _, _ in
                     guard shouldFollowResponse else { return }
-                    bottomContentSpacing = responseFollowSpacing
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(bottomAnchorId, anchor: .bottom)
-                    }
+                    requestFollowScroll()
                 }
             }
         }
@@ -406,6 +425,7 @@ struct ChatView: View {
     private func send() async {
         showPlusMenu = false
         shouldFollowResponse = true
+        inputFocused = false
         let text = inputText
         let useWebSearch = webSearchEnabled
         let sent = await viewModel.send(
@@ -415,6 +435,7 @@ struct ChatView: View {
         )
         if sent {
             inputText = ""
+            inputFocused = false
             audioPlayback.stop()
             audioRecorder.discardRecordedAudio()
         }
@@ -484,13 +505,13 @@ struct ChatView: View {
     private func startNewConversation() async {
         cancelAudioDraft()
         await viewModel.newConversation()
-        requestScrollToBottom()
+        requestFollowScroll()
     }
 
     private func clearConversation() {
         cancelAudioDraft()
         viewModel.clearConversation()
-        requestScrollToBottom()
+        requestFollowScroll()
     }
 
     private func cancelAudioDraft() {
@@ -505,8 +526,37 @@ struct ChatView: View {
         scrollToBottomRequest += 1
     }
 
-    private func updatePinnedState() {
-        isPinnedToBottom = bottomDistance <= 72
+    private func requestFollowScroll(keepButtonVisible: Bool = false) {
+        shouldFollowResponse = true
+        isSeekingLatestMessage = false
+        isFollowScrollPending = keepButtonVisible
+        bottomContentSpacing = responseFollowSpacing
+        requestScrollToBottom()
+    }
+
+    private func scheduleRequestedFollow(using proxy: ScrollViewProxy, requestID: Int) {
+        DispatchQueue.main.async {
+            guard scrollToBottomRequest == requestID,
+                  shouldFollowResponse,
+                  !isUserScrolling else { return }
+            proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                guard scrollToBottomRequest == requestID,
+                      shouldFollowResponse,
+                      !isUserScrolling else { return }
+                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+            }
+        }
+    }
+
+    private func scheduleAutomaticFollow(using proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            guard shouldFollowResponse,
+                  !isUserScrolling,
+                  bottomDistance > 0 else { return }
+            proxy.scrollTo(bottomAnchorId, anchor: .bottom)
+        }
     }
 
     private func loadOlderMessages(using proxy: ScrollViewProxy) {
