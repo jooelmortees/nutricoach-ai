@@ -53,7 +53,8 @@ struct MessageRow: View {
             }
 
             // Contenido del mensaje
-            if !message.content.isEmpty {
+            if !message.content.isEmpty ||
+               (message.role == .assistant && message.isStreaming) {
                 messageContent
             }
         }
@@ -89,22 +90,11 @@ struct MessageRow: View {
             }
         } else {
             // ASSISTANT: texto plano, sin bocadillo, pegado a la izquierda
-            VStack(alignment: .leading, spacing: 6) {
-                if !message.isStreaming,
-                   let extracted = PendingMeal.extract(from: message.content),
-                   let macros = extracted.macros {
-                    // Mensaje del historial con macros: sin animacion
-                    if !extracted.cleaned.isEmpty {
-                        MarkdownView(text: extracted.cleaned)
-                    }
-                    MacrosCard(meal: macros, onSave: { editedMeal in
-                        await onSaveMeal(editedMeal)
-                    })
-                } else {
-                    // Mensaje del historial: sin animacion
-                    MarkdownView(text: message.content)
-                }
-            }
+            StreamingAssistantContent(
+                text: message.content,
+                isStreaming: message.isStreaming,
+                onSaveMeal: onSaveMeal
+            )
             .contextMenu {
                 Button {
                     UIPasteboard.general.string = message.content
@@ -112,6 +102,106 @@ struct MessageRow: View {
                     Label("Copiar", systemImage: "doc.on.doc")
                 }
             }
+        }
+    }
+}
+
+private struct StreamingAssistantContent: View {
+    let text: String
+    let isStreaming: Bool
+    let onSaveMeal: (PendingMeal) async -> Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var animator: StreamingTextAnimator
+    @State private var appearingOpacity = 1.0
+
+    init(
+        text: String,
+        isStreaming: Bool,
+        onSaveMeal: @escaping (PendingMeal) async -> Bool
+    ) {
+        self.text = text
+        self.isStreaming = isStreaming
+        self.onSaveMeal = onSaveMeal
+        _animator = StateObject(
+            wrappedValue: StreamingTextAnimator(text: text, isStreaming: isStreaming)
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if animator.frame.isComplete {
+                completedContent
+            } else {
+                (Text(animator.frame.stableText) +
+                 Text(animator.frame.appearingText)
+                    .foregroundColor(Color.primary.opacity(appearingOpacity)))
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+        }
+        .onAppear {
+            animator.update(
+                text: text,
+                isStreaming: isStreaming,
+                reduceMotion: reduceMotion
+            )
+        }
+        .onDisappear {
+            animator.pause()
+        }
+        .onChange(of: text) { _, newText in
+            animator.update(
+                text: newText,
+                isStreaming: isStreaming,
+                reduceMotion: reduceMotion
+            )
+        }
+        .onChange(of: isStreaming) { _, streaming in
+            animator.update(
+                text: text,
+                isStreaming: streaming,
+                reduceMotion: reduceMotion
+            )
+        }
+        .onChange(of: reduceMotion) { _, reduced in
+            animator.update(
+                text: text,
+                isStreaming: isStreaming,
+                reduceMotion: reduced
+            )
+        }
+        .onChange(of: animator.frame.revision) { _, _ in
+            guard !animator.frame.appearingText.isEmpty else { return }
+            let revision = animator.frame.revision
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                appearingOpacity = 0.25
+            }
+            DispatchQueue.main.async {
+                guard animator.frame.revision == revision else { return }
+                withAnimation(.easeOut(duration: 0.06)) {
+                    appearingOpacity = 1
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var completedContent: some View {
+        if let extracted = PendingMeal.extract(from: text),
+           let macros = extracted.macros {
+            if !extracted.cleaned.isEmpty {
+                MarkdownView(text: extracted.cleaned)
+            }
+            MacrosCard(meal: macros, onSave: { editedMeal in
+                await onSaveMeal(editedMeal)
+            })
+        } else {
+            MarkdownView(text: text)
         }
     }
 }

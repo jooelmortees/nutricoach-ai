@@ -284,6 +284,14 @@ struct ChatView: View {
                 .onPreferenceChange(ChatBottomPositionPreferenceKey.self) { bottomY in
                     bottomDistance = bottomY - viewport.size.height
                     updatePinnedState()
+                    if shouldFollowResponse,
+                       !isUserScrolling,
+                       bottomDistance > 0,
+                       let lastMessageId = viewModel.messages.last?.id {
+                        DispatchQueue.main.async {
+                            proxy.scrollTo(lastMessageId, anchor: .bottom)
+                        }
+                    }
                 }
                 .onChange(of: scrollToBottomRequest) { _, _ in
                     shouldFollowResponse = true
@@ -298,14 +306,6 @@ struct ChatView: View {
                     guard shouldFollowResponse, let lastMessageId else { return }
                     DispatchQueue.main.async {
                         proxy.scrollTo(lastMessageId, anchor: .bottom)
-                    }
-                }
-                .onChange(of: streamingRevision) { _, revision in
-                    guard shouldFollowResponse,
-                          !isUserScrolling,
-                          let messageId = revision.messageId else { return }
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(messageId, anchor: .bottom)
                     }
                 }
             }
@@ -506,27 +506,6 @@ struct ChatView: View {
         isPinnedToBottom = bottomDistance <= 72
     }
 
-    private var streamingRevision: StreamingRevision {
-        guard let message = viewModel.messages.last,
-              message.role == .assistant,
-              message.isStreaming else {
-            return StreamingRevision(messageId: nil, visibleLength: 0)
-        }
-        let toolsLength = message.toolStatus?.reduce(0) { partial, tool in
-            partial + tool.name.count + tool.summary.count
-        } ?? 0
-        // El razonamiento permanece colapsado durante el streaming y no cambia
-        // la altura visible, por lo que no debe disparar desplazamientos.
-        let visibleLength = message.content.count + toolsLength
-        guard visibleLength > 0 else {
-            return StreamingRevision(messageId: nil, visibleLength: 0)
-        }
-        return StreamingRevision(
-            messageId: message.id,
-            visibleLength: visibleLength
-        )
-    }
-
     private func loadOlderMessages(using proxy: ScrollViewProxy) {
         guard let anchorId = viewModel.messages.first?.id else { return }
         Task {
@@ -542,11 +521,6 @@ private struct ChatBottomPositionPreferenceKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }
-}
-
-private struct StreamingRevision: Equatable {
-    let messageId: UUID?
-    let visibleLength: Int
 }
 
 // MARK: - Wrapper Identifiable para .sheet(item:) con un String.
