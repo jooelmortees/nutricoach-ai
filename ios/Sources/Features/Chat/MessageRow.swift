@@ -7,11 +7,15 @@
 
 import SwiftUI
 
-struct MessageRow: View {
+struct MessageRow: View, Equatable {
     let message: ChatMessage
-    @ObservedObject var audioPlayback: AudioPlaybackController
+    let audioPlayback: AudioPlaybackController
     let onImageTap: (String) -> Void
     let onSaveMeal: (PendingMeal) async -> Bool
+
+    static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
+        lhs.message == rhs.message && lhs.audioPlayback === rhs.audioPlayback
+    }
 
     @ViewBuilder
     var body: some View {
@@ -334,7 +338,10 @@ struct ToolStatus: Identifiable, Equatable {
     var isRunning: Bool
 
     static func == (lhs: ToolStatus, rhs: ToolStatus) -> Bool {
-        lhs.id == rhs.id
+        lhs.id == rhs.id &&
+        lhs.name == rhs.name &&
+        lhs.summary == rhs.summary &&
+        lhs.isRunning == rhs.isRunning
     }
 }
 
@@ -415,7 +422,7 @@ struct PendingIngredient: Codable, Equatable, Identifiable {
 
 struct AttachmentsGrid: View {
     let attachments: [MessageAttachment]
-    @ObservedObject var audioPlayback: AudioPlaybackController
+    let audioPlayback: AudioPlaybackController
     let onImageTap: (String) -> Void
 
     private let thumbSize: CGFloat = 70

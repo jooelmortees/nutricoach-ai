@@ -569,7 +569,16 @@ struct MessageAttachment: Identifiable, Equatable, Codable {
     }
 
     static func == (lhs: MessageAttachment, rhs: MessageAttachment) -> Bool {
-        lhs.id == rhs.id
+        lhs.id == rhs.id &&
+        lhs.type == rhs.type &&
+        lhs.bucket == rhs.bucket &&
+        lhs.path == rhs.path &&
+        lhs.url == rhs.url &&
+        lhs.mimeType == rhs.mimeType &&
+        lhs.name == rhs.name &&
+        lhs.sizeBytes == rhs.sizeBytes &&
+        lhs.durationSeconds == rhs.durationSeconds &&
+        lhs.legacyData == rhs.legacyData
     }
 
     var agentAttachment: AgentAttachment {
@@ -587,7 +596,7 @@ struct MessageAttachment: Identifiable, Equatable, Codable {
     }
 }
 
-struct ChatMessage: Identifiable {
+struct ChatMessage: Identifiable, Equatable {
     let id: UUID
     let role: Role
     var content: String
@@ -614,7 +623,7 @@ struct ChatMessage: Identifiable {
         self.isStreaming = isStreaming
     }
 
-    enum Role {
+    enum Role: Equatable {
         case user, assistant
     }
 }

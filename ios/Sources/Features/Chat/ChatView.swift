@@ -30,9 +30,11 @@ struct ChatView: View {
     @State private var isUserScrolling = false
     @State private var isSeekingLatestMessage = false
     @State private var isFollowScrollPending = false
+    @State private var isSettlingSentMessage = false
     @State private var bottomDistance = CGFloat.greatestFiniteMagnitude
     @State private var bottomContentSpacing: CGFloat = 72
     @State private var scrollToBottomRequest = 0
+    @State private var manualScrollGeneration = 0
     @State private var recordingTask: Task<Void, Never>?
 
     private let bottomAnchorId = "chat-bottom-anchor"
@@ -199,7 +201,7 @@ struct ChatView: View {
             ScrollViewReader { proxy in
                 ZStack(alignment: .bottomTrailing) {
                     ScrollView {
-                        LazyVStack(spacing: 0) {
+                        VStack(spacing: 0) {
                             if viewModel.hasMoreHistory || viewModel.isLoadingOlderMessages {
                                 Button {
                                     loadOlderMessages(using: proxy)
@@ -232,6 +234,7 @@ struct ChatView: View {
                                         await viewModel.saveMeal(meal)
                                     }
                                 )
+                                .equatable()
                                 .id(msg.id)
                                 .transition(.asymmetric(
                                     insertion: .scale(scale: 0.95).combined(with: .opacity),
@@ -261,6 +264,9 @@ struct ChatView: View {
                     .simultaneousGesture(
                         DragGesture(minimumDistance: 4)
                             .onChanged { value in
+                                if !isUserScrolling {
+                                    manualScrollGeneration += 1
+                                }
                                 isUserScrolling = true
                                 shouldFollowResponse = false
                                 isFollowScrollPending = false
@@ -281,7 +287,8 @@ struct ChatView: View {
                             }
                     )
 
-                    if isFollowScrollPending || !shouldFollowResponse || !isPinnedToBottom {
+                    if !isSettlingSentMessage &&
+                       (isFollowScrollPending || !shouldFollowResponse || !isPinnedToBottom) {
                         Button {
                             requestFollowScroll(keepButtonVisible: true)
                         } label: {
@@ -305,6 +312,7 @@ struct ChatView: View {
                     }
 
                     if !shouldFollowResponse,
+                       !isSettlingSentMessage,
                        !isUserScrolling,
                        isSeekingLatestMessage,
                        distance <= followReattachmentThreshold {
@@ -424,8 +432,12 @@ struct ChatView: View {
 
     private func send() async {
         showPlusMenu = false
-        shouldFollowResponse = true
-        inputFocused = false
+        let wasFollowingResponse = shouldFollowResponse
+        let scrollGeneration = manualScrollGeneration
+        isSettlingSentMessage = true
+        isSeekingLatestMessage = false
+        shouldFollowResponse = false
+        isFollowScrollPending = false
         let text = inputText
         let useWebSearch = webSearchEnabled
         let sent = await viewModel.send(
@@ -438,6 +450,23 @@ struct ChatView: View {
             inputFocused = false
             audioPlayback.stop()
             audioRecorder.discardRecordedAudio()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                isSettlingSentMessage = false
+                guard !isUserScrolling else { return }
+                if manualScrollGeneration != scrollGeneration {
+                    if isSeekingLatestMessage,
+                       bottomDistance <= followReattachmentThreshold {
+                        requestFollowScroll()
+                    }
+                    return
+                }
+                requestFollowScroll()
+            }
+        } else {
+            isSettlingSentMessage = false
+            if manualScrollGeneration == scrollGeneration {
+                shouldFollowResponse = wasFollowingResponse
+            }
         }
     }
 
@@ -540,13 +569,6 @@ struct ChatView: View {
                   shouldFollowResponse,
                   !isUserScrolling else { return }
             proxy.scrollTo(bottomAnchorId, anchor: .bottom)
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                guard scrollToBottomRequest == requestID,
-                      shouldFollowResponse,
-                      !isUserScrolling else { return }
-                proxy.scrollTo(bottomAnchorId, anchor: .bottom)
-            }
         }
     }
 
