@@ -33,6 +33,9 @@ packages:
   KeychainAccess:
     url: https://github.com/kishikawakatsumi/KeychainAccess
     from: 4.2.2
+  SwiftStreamingMarkdown:
+    url: https://github.com/microsoft/SwiftStreamingMarkdown
+    exactVersion: 0.5.0
 
 targets:
   NutriCoach:
@@ -92,6 +95,8 @@ targets:
       - package: Supabase
         product: Supabase
       - package: KeychainAccess
+      - package: SwiftStreamingMarkdown
+        product: SwiftStreamingMarkdown
       - sdk: HealthKit.framework
       - sdk: AVFoundation.framework
       - sdk: Photos.framework

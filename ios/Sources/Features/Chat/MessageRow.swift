@@ -1,6 +1,6 @@
 // ============================================================
 // MessageRow - celda individual del chat (estilo Claude)
-// Assistant: texto plano pegado a la izquierda, sin bocadillo
+// Assistant: Markdown pegado a la izquierda, sin bocadillo
 // User: caja con fondo pegada a la derecha
 // Sin avatares, sin logo
 // ============================================================
@@ -71,13 +71,13 @@ struct MessageRow: View, Equatable {
             VStack(alignment: .leading, spacing: 6) {
                 if let extracted = PendingMeal.extract(from: message.content), let macros = extracted.macros {
                     if !extracted.cleaned.isEmpty {
-                        MarkdownView(text: extracted.cleaned)
+                        ChatMarkdownView(text: extracted.cleaned)
                     }
                     MacrosCard(meal: macros, onSave: { editedMeal in
                         await onSaveMeal(editedMeal)
                     })
                 } else {
-                    MarkdownView(text: message.content)
+                    ChatMarkdownView(text: message.content)
                 }
             }
             .padding(.horizontal, 14)
@@ -93,7 +93,7 @@ struct MessageRow: View, Equatable {
                 }
             }
         } else {
-            // ASSISTANT: texto plano, sin bocadillo, pegado a la izquierda
+            // ASSISTANT: Markdown sin bocadillo, pegado a la izquierda
             StreamingAssistantContent(
                 text: message.content,
                 isStreaming: message.isStreaming,
@@ -115,9 +115,7 @@ private struct StreamingAssistantContent: View {
     let isStreaming: Bool
     let onSaveMeal: (PendingMeal) async -> Bool
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var hasCompleted: Bool
-    @State private var streamingHeight: CGFloat = 1
+    @State private var usesStreamingRenderer: Bool
 
     init(
         text: String,
@@ -127,41 +125,25 @@ private struct StreamingAssistantContent: View {
         self.text = text
         self.isStreaming = isStreaming
         self.onSaveMeal = onSaveMeal
-        _hasCompleted = State(initialValue: !isStreaming)
+        _usesStreamingRenderer = State(initialValue: isStreaming)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if hasCompleted {
-                completedContent
+            if !isStreaming,
+               let extracted = PendingMeal.extract(from: text),
+               let macros = extracted.macros {
+                if !extracted.cleaned.isEmpty {
+                    ChatMarkdownView(text: extracted.cleaned)
+                }
+                MacrosCard(meal: macros, onSave: { editedMeal in
+                    await onSaveMeal(editedMeal)
+                })
+            } else if usesStreamingRenderer {
+                StreamingChatMarkdownView(text: text, isStreaming: isStreaming)
             } else {
-                StreamingTextView(
-                    text: text,
-                    isStreaming: isStreaming,
-                    reduceMotion: reduceMotion,
-                    measuredHeight: $streamingHeight,
-                    onFinished: {
-                        hasCompleted = true
-                    }
-                )
-                .frame(maxWidth: .infinity)
-                .frame(height: streamingHeight)
+                ChatMarkdownView(text: text)
             }
-        }
-    }
-
-    @ViewBuilder
-    private var completedContent: some View {
-        if let extracted = PendingMeal.extract(from: text),
-           let macros = extracted.macros {
-            if !extracted.cleaned.isEmpty {
-                MarkdownView(text: extracted.cleaned)
-            }
-            MacrosCard(meal: macros, onSave: { editedMeal in
-                await onSaveMeal(editedMeal)
-            })
-        } else {
-            MarkdownView(text: text)
         }
     }
 }
