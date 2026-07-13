@@ -35,7 +35,7 @@ packages:
     from: 4.2.2
   SwiftStreamingMarkdown:
     url: https://github.com/microsoft/SwiftStreamingMarkdown
-    exactVersion: 0.5.0
+    revision: 21893c1c1de34676df96adf68b82bf675445afbe
 
 targets:
   NutriCoach:
