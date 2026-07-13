@@ -354,7 +354,7 @@ private enum ChatMarkdownStyle {
             for: UIFont.systemFont(ofSize: size, weight: .semibold),
             compatibleWith: traits
         )
-        TextFonts(
+        return TextFonts(
             normal: normal,
             italic: italicized(normal),
             bold: bold,
