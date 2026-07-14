@@ -24,13 +24,9 @@ struct MessageRow: View, Equatable {
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.vertical, 10)
         } else {
-            HStack(alignment: .top, spacing: 8) {
-                NutriGrowthIndicator(isActive: message.isStreaming)
-                    .padding(.top, 2)
-                contentStack
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.vertical, 10)
+            contentStack
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 10)
         }
     }
 
@@ -143,6 +139,46 @@ private struct StreamingAssistantContent: View {
                 StreamingChatMarkdownView(text: text, isStreaming: isStreaming)
             } else {
                 ChatMarkdownView(text: text)
+            }
+
+            if isStreaming {
+                StreamingDotsIndicator()
+                    .padding(.top, 2)
+            }
+        }
+    }
+}
+
+private struct StreamingDotsIndicator: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Group {
+            if reduceMotion {
+                dots(at: 0)
+            } else {
+                TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { timeline in
+                    dots(at: timeline.date.timeIntervalSinceReferenceDate)
+                }
+            }
+        }
+        .frame(width: 28, height: 10, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Generando respuesta")
+    }
+
+    private func dots(at time: TimeInterval) -> some View {
+        HStack(spacing: 4) {
+            ForEach(0..<3, id: \.self) { index in
+                let pulse = reduceMotion
+                    ? 0.65
+                    : (sin(time * 4 - Double(index) * 0.75) + 1) / 2
+
+                Circle()
+                    .fill(Color(.secondaryLabel))
+                    .opacity(0.35 + pulse * 0.5)
+                    .frame(width: 5, height: 5)
+                    .scaleEffect(0.8 + CGFloat(pulse) * 0.2)
             }
         }
     }
