@@ -101,7 +101,8 @@ Todas las tablas tienen RLS: cada usuario solo ve/edita sus datos.
    - Carga perfil + hechos activos + últimos 20 mensajes
    - Construye system prompt (perfil + hechos + instrucciones)
    - Llama a `POST /v1beta/openai/chat/completions` con `model=gemini-3.5-flash`, tools, reasoning_effort=medium, stream=true
-3. **Gemini 3.5 Flash**:
+   - Reintenta errores transitorios con backoff exponencial y usa `gemini-3.1-flash-lite` si 3.5 sigue sin estar disponible
+3. **Gemini**:
    - Genera thinking (interno, envuelto en tags `<thought>` en delta.content)
    - Decide si llamar a tools
    - Si sí: para, llama a `POST /functions/v1/mcp-router` con `tool` y `arguments`

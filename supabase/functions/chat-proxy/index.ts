@@ -6,6 +6,7 @@
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
+import { fetchGeminiChatCompletion } from "../_shared/gemini.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -13,6 +14,7 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
 const GEMINI_BASE_URL = Deno.env.get("GEMINI_BASE_URL") ?? "https://generativelanguage.googleapis.com/v1beta/openai";
 const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash";
+const GEMINI_FALLBACK_MODEL = Deno.env.get("GEMINI_FALLBACK_MODEL") ?? "gemini-3.1-flash-lite";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "app.nutricoach://",
@@ -235,6 +237,7 @@ serve(async (req) => {
         let detectedMacros: any = null;
         let savedMealFlag = false;
         let assistantMessageSaved = false;
+        let activeModel = GEMINI_MODEL;
 
         try {
           for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration++) {
@@ -246,14 +249,13 @@ serve(async (req) => {
             // con stream:true, mientras que con stream:false el audio se
             // procesa correctamente con promptTokensDetails AUDIO=25).
             const useStreaming = !hasAudio;
-            const upstreamResp = await fetch(`${GEMINI_BASE_URL}/chat/completions`, {
-              method: "POST",
-              headers: {
-                "Authorization": `Bearer ${GEMINI_API_KEY}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                model: GEMINI_MODEL,
+            const geminiResult = await fetchGeminiChatCompletion({
+              apiKey: GEMINI_API_KEY,
+              baseUrl: GEMINI_BASE_URL,
+              primaryModel: GEMINI_MODEL,
+              fallbackModel: GEMINI_FALLBACK_MODEL,
+              preferredModel: activeModel,
+              body: {
                 messages: apiMessages,
                 tools,
                 stream: useStreaming,
@@ -263,8 +265,10 @@ serve(async (req) => {
                 // envuelto en tags <thought>...</thought> con un marcador
                 // extra_content.google.thought = true en cada chunk de thinking.
                 // El parser en backend separa los bloques <thought> del content.
-              }),
+              },
             });
+            const upstreamResp = geminiResult.response;
+            activeModel = geminiResult.model;
 
             if (!upstreamResp.ok) {
               const errText = await upstreamResp.text();
@@ -1246,18 +1250,16 @@ async function executeTool(
 
         // Generar el plan llamando a Gemini con prompt de plan
         const planPrompt = buildPlanPrompt(profile, facts, type, notes);
-        const geminiResp = await fetch(`${GEMINI_BASE_URL}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${GEMINI_API_KEY}`,
-            "Content-Type": "application/json",
-          },
+        const { response: geminiResp } = await fetchGeminiChatCompletion({
+          apiKey: GEMINI_API_KEY,
+          baseUrl: GEMINI_BASE_URL,
+          primaryModel: GEMINI_MODEL,
+          fallbackModel: GEMINI_FALLBACK_MODEL,
           // CRITICO: reasoning_effort minimal para que response_format produzca
           // JSON puro. Con reasoning_effort medium/high, Gemini emite bloques
           // de razonamiento dentro de content y corrompe el JSON.
           // Verificado empiricamente 2026-07-07.
-          body: JSON.stringify({
-            model: GEMINI_MODEL,
+          body: {
             messages: [
               { role: "system", content: planPrompt.system },
               { role: "user", content: planPrompt.user },
@@ -1267,7 +1269,7 @@ async function executeTool(
             temperature: 0.7,
             response_format: { type: "json_object" },
             reasoning_effort: "minimal",
-          }),
+          },
         });
 
         if (!geminiResp.ok) {

@@ -5,6 +5,7 @@
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
+import { fetchGeminiChatCompletion } from "../_shared/gemini.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -12,6 +13,7 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
 const GEMINI_BASE_URL = Deno.env.get("GEMINI_BASE_URL") ?? "https://generativelanguage.googleapis.com/v1beta/openai";
 const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash";
+const GEMINI_FALLBACK_MODEL = Deno.env.get("GEMINI_FALLBACK_MODEL") ?? "gemini-3.1-flash-lite";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "app.nutricoach://",
@@ -65,14 +67,12 @@ serve(async (req) => {
       : "Genera un plan de comida para un solo día (hoy). Con desayuno, almuerzo, cena y un snack. Adapta las comidas a mi perfil y preferencias. Devuelve SOLO el JSON, sin texto adicional.";
 
     // Llamar a Gemini sin streaming (queremos el JSON completo)
-    const geminiResponse = await fetch(`${GEMINI_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${GEMINI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: GEMINI_MODEL,
+    const { response: geminiResponse } = await fetchGeminiChatCompletion({
+      apiKey: GEMINI_API_KEY,
+      baseUrl: GEMINI_BASE_URL,
+      primaryModel: GEMINI_MODEL,
+      fallbackModel: GEMINI_FALLBACK_MODEL,
+      body: {
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
@@ -86,7 +86,7 @@ serve(async (req) => {
         // Verificado empiricamente 2026-07-07.
         response_format: { type: "json_object" },
         reasoning_effort: "minimal",
-      }),
+      },
     });
 
     if (!geminiResponse.ok) {
