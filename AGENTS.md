@@ -24,8 +24,8 @@ Reglas específicas de este proyecto. Complementa (no sustituye) el AGENTS.md gl
 - **Estructura del jsonb `plan`** (generada por Edge Function `generate-plan`):
   - `type` ("weekly"|"daily"), `title`, `summary`, `target_kcal`, `target_protein_g`, `target_carbs_g`, `target_fat_g`
   - `days[]` con `day` (string) y `meals[]`
-  - Cada `meal`: `type` (breakfast|lunch|dinner|snack), `name`, `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fiber_g`, `notes`, **`ingredients[]`** (name, quantity, unit), **`preparation`** (pasos), `prep_time_min`, `cook_time_min`, `servings`, `difficulty` (facil|media|alta), `tips`, `allergens[]`.
-- **CRÍTICO - ingredientes y preparación obligatorios**: el prompt de `generate-plan` fuerza a Gemini a devolver SIEMPRE `ingredients` y `preparation` en cada comida. Los campos extendidos son opcionales en el struct Swift `PlanMeal` para mantener compatibilidad con planes antiguos, pero la Edge Function siempre los rellena en planes nuevos.
+  - Cada `meal`: `type` (breakfast|lunch|dinner|snack), `name`, `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fiber_g`, `notes`, **`ingredients[]`** (name, quantity, unit), **`preparation_steps[]`** (4-8 pasos detallados), `prep_time_min`, `cook_time_min`, `servings`, `difficulty` (facil|media|alta), `tips`, `allergens[]`.
+- **CRÍTICO - ingredientes y preparación obligatorios**: el generador compartido crea y valida cada día por separado. Gemini debe devolver SIEMPRE `ingredients` y `preparation_steps` en cada comida; un plan incompleto no se guarda. `PlanMeal` mantiene `preparation` opcional solo para decodificar planes antiguos.
 - **UI**: al pulsar una comida del plan se abre `PlanMealDetailView` (sheet) con ingredientes, preparación, macros, tiempos, dificultad, tips, alérgenos y botón "Registrar como comida de hoy" (inserta en `meals` con `source='ai_suggestion'`).
 - **`PlanMealDifficulty`**: enum con `init(from:)` custom que normaliza tildes y mayúsculas. Si Gemini devuelve "Fácil" o "MEDIA", se mapea correctamente.
 - **`source` al registrar desde plan**: usar siempre `'ai_suggestion'` (valor válido del enum `meal_source_t`). NUNCA inventar valores de enum.

@@ -9,6 +9,8 @@ interface GeminiChatCompletionOptions {
   primaryModel: string;
   fallbackModel: string;
   preferredModel?: string;
+  headerTimeoutMs?: number;
+  deadlineAt?: number;
   body: Record<string, unknown>;
 }
 
@@ -36,9 +38,18 @@ export async function fetchGeminiChatCompletion(
 
     for (let attempt = 0; attempt < MAX_ATTEMPTS_PER_MODEL; attempt++) {
       try {
-        const headerTimeoutMs = options.body.stream === true
-          ? STREAMING_HEADER_TIMEOUT_MS
-          : NON_STREAMING_HEADER_TIMEOUT_MS;
+        const configuredTimeoutMs = options.headerTimeoutMs ?? (
+          options.body.stream === true
+            ? STREAMING_HEADER_TIMEOUT_MS
+            : NON_STREAMING_HEADER_TIMEOUT_MS
+        );
+        const remainingMs = options.deadlineAt === undefined
+          ? configuredTimeoutMs
+          : options.deadlineAt - Date.now();
+        if (remainingMs <= 0) {
+          throw new Error("Se agoto el tiempo disponible para Gemini");
+        }
+        const headerTimeoutMs = Math.min(configuredTimeoutMs, remainingMs);
         const response = await fetchWithHeaderTimeout(
           `${options.baseUrl}/chat/completions`,
           {

@@ -37,6 +37,7 @@ final class PlansViewModel: ObservableObject {
         do {
             let token = try await SupabaseService.shared.client.auth.session.accessToken
             var req = URLRequest(url: Config.generatePlanURL)
+            req.timeoutInterval = 145
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -147,7 +148,8 @@ final class PlansViewModel: ObservableObject {
                 let ingsStr = ings.map { "\($0.name):\($0.quantity ?? 0)\($0.unit ?? "")" }.joined(separator: ", ")
                 notesParts.append("ingredients=\(ingsStr)")
             }
-            if let prep = meal.preparation, !prep.isEmpty {
+            if !meal.recipeSteps.isEmpty {
+                let prep = meal.recipeSteps.joined(separator: " ")
                 notesParts.append("prep=\(prep.prefix(200))")
             }
             let notes = notesParts.joined(separator: " ")

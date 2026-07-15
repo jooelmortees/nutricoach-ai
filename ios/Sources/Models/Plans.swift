@@ -71,7 +71,7 @@ struct PlanDay: Codable, Identifiable, Equatable {
 }
 
 /// Una comida del plan.
-/// Los campos extendidos (ingredients, preparation, prepTimeMinutes, etc.)
+/// Los campos extendidos (ingredients, preparationSteps, prepTimeMinutes, etc.)
 /// son opcionales para mantener compatibilidad con planes antiguos que solo
 /// tienen name/kcal/macros/notes. La Edge Function generate-plan siempre los
 /// rellena a partir de la version extendida del prompt.
@@ -88,6 +88,7 @@ struct PlanMeal: Codable, Identifiable, Equatable {
     var fiberG: Double?
     var ingredients: [PlanIngredient]?
     var preparation: String?
+    var preparationSteps: [String]?
     var prepTimeMinutes: Int?
     var cookTimeMinutes: Int?
     var servings: Int?
@@ -102,6 +103,7 @@ struct PlanMeal: Codable, Identifiable, Equatable {
         case fatG = "fat_g"
         case fiberG = "fiber_g"
         case ingredients, preparation
+        case preparationSteps = "preparation_steps"
         case prepTimeMinutes = "prep_time_min"
         case cookTimeMinutes = "cook_time_min"
         case servings, difficulty, tips, allergens
@@ -113,6 +115,33 @@ struct PlanMeal: Codable, Identifiable, Equatable {
         let cook = cookTimeMinutes ?? 0
         guard prep > 0 || cook > 0 else { return nil }
         return prep + cook
+    }
+
+    /// Pasos estructurados de planes nuevos, con fallback para planes antiguos.
+    var recipeSteps: [String] {
+        if let preparationSteps {
+            let steps = preparationSteps
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if !steps.isEmpty { return steps }
+        }
+        guard let preparation, !preparation.isEmpty else { return [] }
+        let lines = preparation
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return lines.map {
+            $0.replacingOccurrences(
+                of: #"^(?:Paso\s+)?\d+[\.\)\-:]\s*"#,
+                with: "",
+                options: [.regularExpression, .caseInsensitive]
+            )
+        }
+    }
+
+    var hasDetailedRecipe: Bool {
+        guard let ingredients, !ingredients.isEmpty else { return false }
+        return !recipeSteps.isEmpty
     }
 }
 

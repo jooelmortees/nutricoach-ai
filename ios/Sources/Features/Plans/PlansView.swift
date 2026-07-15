@@ -705,6 +705,7 @@ private struct PlanMealDetailView: View {
                     headerSection
                     macrosSection
                     metaSection
+                    legacyDetailsNotice
                     ingredientsSection
                     preparationSection
                     tipsSection
@@ -830,7 +831,7 @@ private struct PlanMealDetailView: View {
         Group {
             if let ings = meal.ingredients, !ings.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
-                    Label("Ingredientes", systemImage: "list.bullet.rectangle")
+                    Label(ingredientsTitle, systemImage: "list.bullet.rectangle")
                         .font(.headline)
 
                     VStack(spacing: 8) {
@@ -866,21 +867,56 @@ private struct PlanMealDetailView: View {
         }
     }
 
+    private var ingredientsTitle: String {
+        guard let servings = meal.servings else { return "Ingredientes" }
+        return servings == 1 ? "Ingredientes para 1 racion" : "Ingredientes para \(servings) raciones"
+    }
+
     // MARK: - Preparacion
 
     private var preparationSection: some View {
         Group {
-            if let prep = meal.preparation, !prep.isEmpty {
+            if !meal.recipeSteps.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
-                    Label("Preparacion", systemImage: "fork.knife")
+                    Label("Preparacion paso a paso", systemImage: "list.number")
                         .font(.headline)
 
-                    Text(prep)
-                        .font(.body)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 16) {
+                        ForEach(Array(meal.recipeSteps.enumerated()), id: \.offset) { index, step in
+                            HStack(alignment: .top, spacing: 12) {
+                                Text("\(index + 1)")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.white)
+                                    .frame(width: 26, height: 26)
+                                    .background(Color.green, in: Circle())
+
+                                Text(step)
+                                    .font(.body)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
                 }
                 .padding()
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    private var legacyDetailsNotice: some View {
+        Group {
+            if !meal.hasDetailedRecipe {
+                Label(
+                    "Esta comida pertenece a un plan anterior sin receta detallada. Los planes nuevos incluyen ingredientes, cantidades y preparacion paso a paso.",
+                    systemImage: "info.circle"
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal)
             }
         }

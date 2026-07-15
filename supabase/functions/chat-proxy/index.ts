@@ -7,6 +7,7 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 import { fetchGeminiChatCompletion } from "../_shared/gemini.ts";
+import { generateDetailedMealPlan } from "../_shared/meal-plan.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -361,7 +362,16 @@ serve(async (req) => {
                 const name = tc.function.name;
                 let args: any = {};
                 try { args = JSON.parse(tc.function.arguments || "{}"); } catch (_) { args = {}; }
-                const toolResult = await executeTool(name, args, supabaseAdmin, user.id, profile, facts);
+                const toolResult = await executeToolWithKeepAlive(
+                  name,
+                  args,
+                  supabaseAdmin,
+                  user.id,
+                  profile,
+                  facts,
+                  controller,
+                  encoder,
+                );
                 controller.enqueue(encoder.encode(sseEvent("tool_done", { name, summary: toolResult.summary })));
                 apiMessages.push({
                   role: "tool",
@@ -534,7 +544,16 @@ serve(async (req) => {
               const name = tc.function.name;
               let args: any = {};
               try { args = JSON.parse(tc.function.arguments || "{}"); } catch (_) { args = {}; }
-              const toolResult = await executeTool(name, args, supabaseAdmin, user.id, profile, facts);
+              const toolResult = await executeToolWithKeepAlive(
+                name,
+                args,
+                supabaseAdmin,
+                user.id,
+                profile,
+                facts,
+                controller,
+                encoder,
+              );
               // Emitir tool_done con el summary legible
               controller.enqueue(encoder.encode(sseEvent("tool_done", { name, summary: toolResult.summary })));
               // Anadir el resultado al historial
@@ -1070,6 +1089,31 @@ interface ToolResult {
   summary: string;       // Resumen para emitir al cliente via SSE
 }
 
+async function executeToolWithKeepAlive(
+  name: string,
+  args: any,
+  supabase: any,
+  userId: string,
+  profile: any,
+  facts: any[],
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  encoder: TextEncoder,
+): Promise<ToolResult> {
+  const intervalId = setInterval(() => {
+    try {
+      controller.enqueue(encoder.encode(": keep-alive\n\n"));
+    } catch (error) {
+      console.warn("No se pudo emitir keep-alive SSE:", error);
+      clearInterval(intervalId);
+    }
+  }, 10_000);
+  try {
+    return await executeTool(name, args, supabase, userId, profile, facts);
+  } finally {
+    clearInterval(intervalId);
+  }
+}
+
 async function executeTool(
   name: string,
   args: any,
@@ -1341,54 +1385,40 @@ async function executeTool(
         if (!type || (type !== "weekly" && type !== "daily")) {
           return { content: "Error: type debe ser 'weekly' o 'daily'", summary: "Error en generate_meal_plan" };
         }
+        if (notes !== undefined && typeof notes !== "string") {
+          return { content: "Error: notes debe ser texto", summary: "Error en generate_meal_plan" };
+        }
+        const safeNotes = typeof notes === "string" ? notes.trim().slice(0, 2_000) : undefined;
+        const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const { data: recentMeals, error: recentMealsError } = await supabase
+          .from("meals")
+          .select("name, meal_type, total_kcal, total_protein_g, total_carbs_g, total_fat_g")
+          .eq("user_id", userId)
+          .gte("logged_at", weekAgo)
+          .order("logged_at", { ascending: false })
+          .limit(10);
+        if (recentMealsError) {
+          throw new Error(`No se pudieron cargar las comidas recientes: ${recentMealsError.message}`);
+        }
 
-        // Generar el plan llamando a Gemini con prompt de plan
-        const planPrompt = buildPlanPrompt(profile, facts, type, notes);
-        const { response: geminiResp } = await fetchGeminiChatCompletion({
+        const generated = await generateDetailedMealPlan({
           apiKey: GEMINI_API_KEY,
           baseUrl: GEMINI_BASE_URL,
           primaryModel: GEMINI_MODEL,
           fallbackModel: GEMINI_FALLBACK_MODEL,
-          // CRITICO: reasoning_effort minimal para que response_format produzca
-          // JSON puro. Con reasoning_effort medium/high, Gemini emite bloques
-          // de razonamiento dentro de content y corrompe el JSON.
-          // Verificado empiricamente 2026-07-07.
-          body: {
-            messages: [
-              { role: "system", content: planPrompt.system },
-              { role: "user", content: planPrompt.user },
-            ],
-            stream: false,
-            max_completion_tokens: 8192,
-            temperature: 0.7,
-            response_format: { type: "json_object" },
-            reasoning_effort: "minimal",
-          },
+          profile,
+          facts,
+          recentMeals: recentMeals ?? [],
+          type,
+          notes: safeNotes,
         });
-
-        if (!geminiResp.ok) {
-          const errText = await geminiResp.text();
-          return { content: `Error generando plan: Gemini error ${geminiResp.status}`, summary: "Error generando plan" };
+        if (!generated.plan) {
+          return {
+            content: `No se pudo generar el plan detallado: ${generated.errors.join("; ")}`,
+            summary: "Plan incompleto; no se ha guardado",
+          };
         }
-
-        const geminiData = await geminiResp.json();
-        const content = geminiData.choices?.[0]?.message?.content ?? "";
-
-        let planData: any;
-        try {
-          const jsonStr = extractJson(content) ?? content;
-          planData = JSON.parse(jsonStr);
-        } catch (e) {
-          return { content: `Error parseando JSON del plan: ${String(e)}`, summary: "Error parseando plan" };
-        }
-
-        if (!planData.days || !Array.isArray(planData.days)) {
-          return { content: "El plan generado no tiene estructura valida (falta 'days')", summary: "Plan invalido" };
-        }
-
-        planData.type = type;
-        if (!planData.title) planData.title = type === "weekly" ? "Plan semanal" : "Plan diario";
-        if (!planData.summary) planData.summary = "";
+        const planData = generated.plan;
 
         // Guardar en meal_plans con status=draft
         const today = new Date();
@@ -1401,7 +1431,7 @@ async function executeTool(
             plan: planData,
             generated_by: "agent",
             status: "draft",
-            notes: notes ?? null,
+            notes: safeNotes ?? null,
           })
           .select()
           .single();
@@ -1413,7 +1443,14 @@ async function executeTool(
         const dayCount = planData.days.length;
         const mealCount = planData.days.reduce((sum: number, d: any) => sum + (d.meals?.length ?? 0), 0);
         return {
-          content: JSON.stringify({ ok: true, plan_id: insertedPlan?.id, plan: planData }),
+          content: JSON.stringify({
+            ok: true,
+            plan_id: insertedPlan?.id,
+            title: planData.title,
+            day_count: dayCount,
+            meal_count: mealCount,
+            includes_detailed_recipes: true,
+          }),
           summary: `Plan ${type === "weekly" ? "semanal" : "diario"} generado: ${dayCount} días, ${mealCount} comidas`
         };
       }
@@ -1600,7 +1637,7 @@ function getAgentTools() {
           type: "object",
           properties: {
             type: { type: "string", enum: ["weekly", "daily"], description: "Tipo de plan: semanal (7 dias) o diario (1 dia)" },
-            notes: { type: "string", description: "Notas o preferencias adicionales del usuario para el plan (opcional)" },
+            notes: { type: "string", maxLength: 2000, description: "Notas o preferencias adicionales del usuario para el plan (opcional)" },
           },
           required: ["type"],
         },
@@ -1639,74 +1676,4 @@ function normalizePlanDay(value: unknown): string | null {
     .replace(/[\u0300-\u036f]/g, "");
   if (normalized === "hoy" || PLAN_DAYS.includes(normalized)) return normalized;
   return null;
-}
-
-/// Construye el system + user prompt para generar un plan de comida.
-function buildPlanPrompt(profile: any, facts: any[], type: string, notes?: string): { system: string; user: string } {
-  const profileText = profile
-    ? `PERFIL DEL USUARIO:
-- Objetivo: ${profile.goal ?? "no indicado"}
-- Peso: ${profile.weight_kg ?? "?"} kg
-- Altura: ${profile.height_cm ?? "?"} cm
-- Objetivo diario: ${profile.daily_kcal_target ?? "?"} kcal
-- Macros: ${profile.daily_protein_g ?? "?"}P / ${profile.daily_carbs_g ?? "?"}C / ${profile.daily_fat_g ?? "?"}G
-- Nivel de actividad: ${profile.activity_level ?? "no indicado"}
-- Estilo dietetico: ${(profile.dietary_style ?? []).join(", ") || "no indicado"}
-- Alergenos: ${(profile.allergens ?? []).join(", ") || "ninguno"}
-- Restricciones: ${(profile.restrictions ?? []).join(", ") || "ninguna"}
-- Habilidad cocinando: ${profile.cooking_skill ?? "no indicado"}`
-    : "PERFIL: (usuario sin perfil configurado)";
-
-  const factsText = facts.length
-    ? `\n\nHECHOS DEL USUARIO:\n${facts.map((f) => `- [${f.category}] ${f.fact}`).join("\n")}`
-    : "";
-
-  const notesText = notes ? `\n\nNOTAS: ${notes}` : "";
-
-  const dias = type === "weekly"
-    ? `"lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"`
-    : `"hoy"`;
-
-  const system = `Eres NutriCoach, un dietista-nutricionista espanol experto. Generas planes de comida personalizados.
-
-${profileText}${factsText}${notesText}
-
-Genera un plan de comida ${type === "weekly" ? "semanal (7 dias)" : "diario (1 dia)"}.
-
-REGLAS:
-1. Adapta las comidas al perfil y restricciones del usuario.
-2. Respeta el objetivo calorico y de macros.
-3. Si hay alergenos o restricciones, NUNCA los incluyas.
-4. Usa ingredientes accesibles en Espana.
-5. Las comidas deben ser realistas y variadas.
-
-FORMATO DE RESPUESTA (JSON estricto):
-Devuelve EXCLUSIVAMENTE un JSON valido con esta estructura:
-
-{
-  "type": "${type}",
-  "title": "Titulo breve del plan",
-  "summary": "Resumen del enfoque nutricional en 1-2 frases",
-  "target_kcal": ${profile?.daily_kcal_target ?? 2000},
-  "target_protein_g": ${profile?.daily_protein_g ?? 150},
-  "target_carbs_g": ${profile?.daily_carbs_g ?? 220},
-  "target_fat_g": ${profile?.daily_fat_g ?? 70},
-  "days": [
-    {
-      "day": ${dias},
-      "meals": [
-        { "type": "breakfast", "name": "...", "kcal": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ..., "notes": "..." },
-        { "type": "lunch", "name": "...", "kcal": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ..., "notes": "..." },
-        { "type": "dinner", "name": "...", "kcal": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ..., "notes": "..." },
-        { "type": "snack", "name": "...", "kcal": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ..., "notes": "..." }
-      ]
-    }
-  ]
-}
-
-NO escribas texto fuera del JSON.`;
-
-  const user = `Genera un plan de comida ${type === "weekly" ? "semanal (7 dias, lunes a domingo)" : "diario (hoy)"}. Cada dia con desayuno, almuerzo, cena y un snack. Devuelve SOLO el JSON.`;
-
-  return { system, user };
 }

@@ -5,7 +5,7 @@
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
-import { fetchGeminiChatCompletion } from "../_shared/gemini.ts";
+import { generateDetailedMealPlan } from "../_shared/meal-plan.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -51,6 +51,13 @@ serve(async (req) => {
     if (!body.type || (body.type !== "weekly" && body.type !== "daily")) {
       return jsonError(400, "type must be 'weekly' or 'daily'");
     }
+    if (body.notes !== undefined && typeof body.notes !== "string") {
+      return jsonError(400, "notes must be a string");
+    }
+    if (body.notes && body.notes.length > 2_000) {
+      return jsonError(400, "notes must not exceed 2000 characters");
+    }
+    const notes = body.notes?.trim() || undefined;
 
     const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -59,68 +66,21 @@ serve(async (req) => {
     const facts = await loadActiveFacts(supabaseAdmin, user.id);
     const recentMeals = await loadRecentMeals(supabaseAdmin, user.id);
 
-    // System prompt para generar el plan
-    const systemPrompt = buildPlanSystemPrompt(profile, facts, recentMeals, body.type, body.notes);
-
-    const userPrompt = body.type === "weekly"
-      ? "Genera un plan de comida para toda la semana (7 días, lunes a domingo). Cada día con desayuno, almuerzo, cena y un snack. Adapta las comidas a mi perfil y preferencias. Devuelve SOLO el JSON, sin texto adicional."
-      : "Genera un plan de comida para un solo día (hoy). Con desayuno, almuerzo, cena y un snack. Adapta las comidas a mi perfil y preferencias. Devuelve SOLO el JSON, sin texto adicional.";
-
-    // Llamar a Gemini sin streaming (queremos el JSON completo)
-    const { response: geminiResponse } = await fetchGeminiChatCompletion({
+    const generated = await generateDetailedMealPlan({
       apiKey: GEMINI_API_KEY,
       baseUrl: GEMINI_BASE_URL,
       primaryModel: GEMINI_MODEL,
       fallbackModel: GEMINI_FALLBACK_MODEL,
-      body: {
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        stream: false,
-        max_completion_tokens: 8192,
-        temperature: 0.7,
-        // CRITICO: reasoning_effort minimal para que response_format produzca
-        // JSON puro. Con reasoning_effort medium/high, Gemini emite bloques
-        // de razonamiento dentro de content y corrompe el JSON.
-        // Verificado empiricamente 2026-07-07.
-        response_format: { type: "json_object" },
-        reasoning_effort: "minimal",
-      },
+      profile,
+      facts,
+      recentMeals,
+      type: body.type,
+      notes,
     });
-
-    if (!geminiResponse.ok) {
-      const errText = await geminiResponse.text();
-      return jsonError(500, `Gemini error ${geminiResponse.status}: ${errText}`);
+    if (!generated.plan) {
+      return jsonError(502, `No se pudo generar el plan detallado: ${generated.errors.join("; ")}`);
     }
-
-    const geminiData = await geminiResponse.json();
-    const content = geminiData.choices?.[0]?.message?.content ?? "";
-
-    // Parsear el JSON del plan
-    let planData: any;
-    try {
-      // Gemini con response_format json_object deberia devolver JSON puro,
-      // pero por si acaso extraemos el JSON del texto.
-      const jsonStr = extractJson(content) ?? content;
-      planData = JSON.parse(jsonStr);
-    } catch (e) {
-      return jsonError(500, `Error parseando JSON del plan: ${String(e)}. Content: ${content.substring(0, 500)}`);
-    }
-
-    // Validar estructura minima
-    if (!planData.days || !Array.isArray(planData.days)) {
-      return jsonError(500, "El plan generado no tiene la estructura esperada (falta 'days')");
-    }
-
-    // Asegurar campos obligatorios
-    planData.type = body.type;
-    if (!planData.title) {
-      planData.title = body.type === "weekly" ? "Plan semanal" : "Plan diario";
-    }
-    if (!planData.summary) {
-      planData.summary = "";
-    }
+    const planData = generated.plan;
 
     // Guardar en meal_plans con status=draft
     const today = new Date();
@@ -134,7 +94,7 @@ serve(async (req) => {
         plan: planData,
         generated_by: "generate-plan",
         status: "draft",
-        notes: body.notes ?? null,
+        notes: notes ?? null,
       })
       .select()
       .single();
@@ -161,13 +121,6 @@ function jsonError(status: number, message: string) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
-}
-
-function extractJson(text: string): string | null {
-  const firstBrace = text.indexOf("{");
-  const lastBrace = text.lastIndexOf("}");
-  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) return null;
-  return text.substring(firstBrace, lastBrace + 1);
 }
 
 async function loadProfile(supabase: any, userId: string) {
@@ -201,152 +154,4 @@ async function loadRecentMeals(supabase: any, userId: string) {
     .order("logged_at", { ascending: false })
     .limit(10);
   return data ?? [];
-}
-
-function buildPlanSystemPrompt(
-  profile: any,
-  facts: any[],
-  recentMeals: any[],
-  planType: string,
-  notes?: string
-): string {
-  const profileText = profile
-    ? `PERFIL DEL USUARIO:
-- Nombre: ${profile.full_name ?? "no indicado"}
-- Objetivo: ${profile.goal ?? "no indicado"}
-- Peso: ${profile.weight_kg ?? "?"} kg
-- Altura: ${profile.height_cm ?? "?"} cm
-- Objetivo diario: ${profile.daily_kcal_target ?? "?"} kcal
-- Macros: ${profile.daily_protein_g ?? "?"}P / ${profile.daily_carbs_g ?? "?"}C / ${profile.daily_fat_g ?? "?"}G
-- Nivel de actividad: ${profile.activity_level ?? "no indicado"}
-- Estilo dietetico: ${(profile.dietary_style ?? []).join(", ") || "no indicado"}
-- Alérgenos: ${(profile.allergens ?? []).join(", ") || "ninguno"}
-- Restricciones: ${(profile.restrictions ?? []).join(", ") || "ninguna"}
-- Condiciones médicas: ${(profile.medical_conditions ?? []).join(", ") || "ninguna"}
-- Habilidad cocinando: ${profile.cooking_skill ?? "no indicado"}
-- Presupuesto semanal: ${profile.budget_eur_per_week ?? "no indicado"} EUR`
-    : "PERFIL: (usuario sin perfil configurado)";
-
-  const factsText = facts.length
-    ? `\n\nHECHOS DEL USUARIO:\n${facts.map((f) => `- [${f.category}] ${f.fact}`).join("\n")}`
-    : "";
-
-  const mealsText = recentMeals.length
-    ? `\n\nCOMIDAS RECIENTES (ultimos 7 dias):\n${recentMeals.map((m) => `- ${m.name} (${m.meal_type ?? "?"}): ${m.total_kcal ?? "?"} kcal`).join("\n")}`
-    : "";
-
-  const notesText = notes ? `\n\nNOTAS DEL USUARIO: ${notes}` : "";
-
-  const diasSemana = planType === "weekly"
-    ? `"lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"`
-    : `"hoy"`;
-
-  return `Eres NutriCoach, un dietista-nutricionista español experto. Generas planes de comida personalizados basados en evidencia.
-
-${profileText}${factsText}${mealsText}${notesText}
-
-Genera un plan de comida ${planType === "weekly" ? "semanal (7 días)" : "diario (1 día)"}.
-
-REGLAS:
-1. Adapta las comidas al perfil, preferencias y restricciones del usuario.
-2. Respeta el objetivo calórico y de macros del usuario.
-3. Si hay alérgenos o restricciones, NUNCA los incluyas.
-4. Usa ingredientes accesibles en España.
-5. Las comidas deben ser realistas y variadas.
-6. Si el usuario tiene habilidad de cocina baja, recetas simples. Si es alta, más elaboradas.
-7. Si hay presupuesto, ajusta las comidas a ese rango.
-
-FORMATO DE RESPUESTA (JSON estricto):
-Devuelve EXCLUSIVAMENTE un JSON válido con esta estructura exacta. Cada comida debe ser completa y detallada:
-
-{
-  "type": "${planType}",
-  "title": "Titulo breve del plan",
-  "summary": "Resumen del enfoque nutricional en 1-2 frases",
-  "target_kcal": 2200,
-  "target_protein_g": 160,
-  "target_carbs_g": 220,
-  "target_fat_g": 70,
-  "days": [
-    {
-      "day": ${diasSemana},
-      "meals": [
-        {
-          "type": "breakfast",
-          "name": "Nombre del plato",
-          "kcal": 450,
-          "protein_g": 22,
-          "carbs_g": 38,
-          "fat_g": 24,
-          "fiber_g": 6,
-          "notes": "Resumen breve de la comida en 1 frase",
-          "ingredients": [
-            { "name": "Avena", "quantity": 50, "unit": "g" },
-            { "name": "Leche semidesnatada", "quantity": 200, "unit": "ml" },
-            { "name": "Platano", "quantity": 1, "unit": "ud" }
-          ],
-          "preparation": "Pasos detallados de preparacion (1-2-3...), claros y concisos, en español. Incluye cantidades, temperaturas y tiempos cuando aplique.",
-          "prep_time_min": 5,
-          "cook_time_min": 10,
-          "servings": 1,
-          "difficulty": "facil",
-          "tips": "Truco o variante opcional (sustituciones, ahorro tiempo, etc.)",
-          "allergens": ["leche", "gluten"]
-        },
-        {
-          "type": "lunch",
-          "name": "...",
-          "kcal": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ..., "fiber_g": ...,
-          "notes": "...",
-          "ingredients": [ ... ],
-          "preparation": "...",
-          "prep_time_min": ..., "cook_time_min": ..., "servings": ..., "difficulty": "...",
-          "tips": "...",
-          "allergens": [ ... ]
-        },
-        {
-          "type": "dinner",
-          "name": "...",
-          "kcal": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ..., "fiber_g": ...,
-          "notes": "...",
-          "ingredients": [ ... ],
-          "preparation": "...",
-          "prep_time_min": ..., "cook_time_min": ..., "servings": ..., "difficulty": "...",
-          "tips": "...",
-          "allergens": [ ... ]
-        },
-        {
-          "type": "snack",
-          "name": "...",
-          "kcal": ..., "protein_g": ..., "carbs_g": ..., "fat_g": ..., "fiber_g": ...,
-          "notes": "...",
-          "ingredients": [ ... ],
-          "preparation": "...",
-          "prep_time_min": ..., "cook_time_min": ..., "servings": ..., "difficulty": "...",
-          "tips": "...",
-          "allergens": [ ... ]
-        }
-      ]
-    }
-  ]
-}
-
-Reglas del JSON:
-- type: "${planType}"
-- target_kcal, target_protein_g, target_carbs_g, target_fat_g: los del perfil del usuario
-- days: array con ${planType === "weekly" ? "7 dias (lunes a domingo)" : "1 dia (hoy)"}
-- Cada dia tiene 4 comidas: breakfast, lunch, dinner, snack
-- kcal, protein_g, carbs_g, fat_g, fiber_g: numeros enteros
-- notes: resumen breve de la comida en 1 frase
-- ingredients: lista SIEMPRE con al menos 3 ingredientes. Cada uno con name, quantity (numero) y unit (g, ml, ud, cda, cdta, etc.)
-- preparation: pasos detallados en español, claros y accionables. Para snacks sin cocccion, indicar montaje o preparacion.
-- prep_time_min, cook_time_min: minutos enteros (0 si no hay coccion)
-- servings: raciones (normalmente 1)
-- difficulty: "facil", "media" o "alta"
-- tips: truco o variante opcional (puede ser string vacio)
-- allergens: lista de alérgenos presentes (leche, gluten, huevo, frutos secos, soja, pescado, marisco, etc.). Array vacio si ninguno.
-
-CRITICO: ingredients y preparation son OBLIGATORIOS en cada comida. No los omitas nunca.
-
-NO escribas texto fuera del JSON.`;
 }
