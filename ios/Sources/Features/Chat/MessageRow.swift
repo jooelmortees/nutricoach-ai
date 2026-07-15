@@ -264,7 +264,7 @@ private struct ToolPill: View {
         case "web_search": return Color.blue
         case "remember_fact": return Color.purple
         case "calculate_daily_target": return Color.orange
-        case "get_user_profile", "get_recent_meals", "get_health_metrics": return Color.green
+        case "get_user_profile", "get_recent_meals", "get_active_meal_plan", "get_health_metrics": return Color.green
         case "generate_meal_plan": return Color.teal
         default: return Color.gray
         }
@@ -274,6 +274,7 @@ private struct ToolPill: View {
         switch tool.name {
         case "get_user_profile": return "person.crop.circle"
         case "get_recent_meals": return "fork.knife"
+        case "get_active_meal_plan": return "calendar.badge.checkmark"
         case "get_health_metrics": return "heart.text.square"
         case "remember_fact": return "brain"
         case "web_search": return "magnifyingglass"
@@ -287,6 +288,7 @@ private struct ToolPill: View {
         switch tool.name {
         case "get_user_profile": return "Consultando tu perfil"
         case "get_recent_meals": return "Revisando tus comidas recientes"
+        case "get_active_meal_plan": return "Consultando tu plan activo"
         case "get_health_metrics": return "Leyendo tus metricas de salud"
         case "remember_fact": return "Guardando en memoria"
         case "web_search": return "Buscando informacion"

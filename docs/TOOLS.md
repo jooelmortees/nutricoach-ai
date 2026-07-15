@@ -36,6 +36,7 @@
 | `get_recent_workouts` | wearable | 2 |
 | `analyze_health_pattern` | wearable | 4 |
 | `generate_meal_plan` | plans | 3 |
+| `get_active_meal_plan` | plans | 1 ✅ |
 | `generate_daily_plan` | plans | 3 |
 | `generate_shopping_list` | plans | 3 |
 | `swap_meal` | plans | 3 |

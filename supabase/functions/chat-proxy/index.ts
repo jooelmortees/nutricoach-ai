@@ -1143,6 +1143,100 @@ async function executeTool(
           summary: `${data?.length ?? 0} comidas de los ultimos 7 dias`
         };
       }
+      case "get_active_meal_plan": {
+        const requestedDay = resolvePlanDay(args?.day);
+        if (args?.day !== undefined && !requestedDay) {
+          return {
+            content: JSON.stringify({
+              ok: false,
+              error: "Dia no valido",
+              allowed_days: ["hoy", ...PLAN_DAYS],
+            }),
+            summary: "Dia no valido al consultar el plan activo",
+          };
+        }
+
+        const { data, error } = await supabase
+          .from("meal_plans")
+          .select("id, week_start, plan, generated_by, status, notes, created_at, updated_at")
+          .eq("user_id", userId)
+          .eq("status", "active")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (error) {
+          return {
+            content: JSON.stringify({ ok: false, error: error.message }),
+            summary: "Error leyendo el plan activo",
+          };
+        }
+        if (!data) {
+          return {
+            content: JSON.stringify({ ok: true, active_plan: null }),
+            summary: "No hay ningun plan activo",
+          };
+        }
+
+        const plan = data.plan && typeof data.plan === "object" && !Array.isArray(data.plan)
+          ? data.plan
+          : {};
+        const days = Array.isArray(plan.days) ? plan.days : [];
+        const availableDays = days
+          .map((day: any) => typeof day?.day === "string" ? day.day : null)
+          .filter((day: string | null): day is string => day !== null);
+
+        if (requestedDay) {
+          const selectedDay = days.find((day: any) =>
+            normalizePlanDay(day?.day) === requestedDay
+          ) ?? null;
+          return {
+            content: JSON.stringify({
+              ok: true,
+              active_plan: {
+                id: data.id,
+                week_start: data.week_start,
+                status: data.status,
+                generated_by: data.generated_by,
+                notes: data.notes,
+                created_at: data.created_at,
+                updated_at: data.updated_at,
+                type: plan.type ?? null,
+                title: plan.title ?? null,
+                summary: plan.summary ?? null,
+                target_kcal: plan.target_kcal ?? null,
+                target_protein_g: plan.target_protein_g ?? null,
+                target_carbs_g: plan.target_carbs_g ?? null,
+                target_fat_g: plan.target_fat_g ?? null,
+              },
+              requested_day: requestedDay,
+              day: selectedDay,
+              available_days: availableDays,
+            }),
+            summary: selectedDay
+              ? `Plan activo consultado: ${requestedDay}`
+              : `El plan activo no contiene ${requestedDay}`,
+          };
+        }
+
+        return {
+          content: JSON.stringify({
+            ok: true,
+            active_plan: {
+              ...plan,
+              id: data.id,
+              week_start: data.week_start,
+              status: data.status,
+              generated_by: data.generated_by,
+              notes: data.notes,
+              created_at: data.created_at,
+              updated_at: data.updated_at,
+            },
+            available_days: availableDays,
+          }),
+          summary: `Plan activo consultado: ${plan.title ?? "sin titulo"}`,
+        };
+      }
       case "get_health_metrics": {
         const today = new Date();
         const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -1364,12 +1458,14 @@ TUS REGLAS:
 5. USA LAS HERRAMIENTAS (tools) en lugar de inventar datos:
    - get_user_profile: para recordar el perfil completo
    - get_recent_meals: para ver qué ha comido esta semana
+   - get_active_meal_plan: para leer el plan o rutina alimentaria activa, completo o por dia
    - get_health_metrics: para ver peso, pasos, FC, etc. de la última semana
    - remember_fact: para guardar info importante que el usuario te cuente (alergia, preferencia, objetivo)
    - web_search: para buscar info nutricional actualizada
    - calculate_daily_target: para calcular kcal/macros diarias recomendadas según peso, altura, edad, sexo, actividad y objetivo
 6. ANTES de pedir datos al usuario, CONSULTA las herramientas. Solo pregunta si no puedes obtener la info.
 7. Si el usuario no tiene objetivo diario configurado, pregúntale sus datos (peso, altura, edad, sexo, nivel de actividad, objetivo) y usa calculate_daily_target para calcularlo.
+8. Si pregunta por su plan, rutina, menu activo o que debe comer un dia, llama SIEMPRE a get_active_meal_plan antes de responder. No afirmes que no puedes ver el plan sin consultar esta herramienta.
 
 FORMATO DE MACROS PARA COMIDAS:
 Cuando el usuario te describa una comida o envíe una foto, tu respuesta DEBE empezar con un bloque JSON válido con este formato EXACTO:
@@ -1416,6 +1512,24 @@ function getAgentTools() {
         name: "get_recent_meals",
         description: "Obtiene las comidas registradas en los ultimos 7 dias con sus macros.",
         parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_active_meal_plan",
+        description: "Lee el plan o rutina alimentaria que el usuario tiene activa en la aplicacion. Usar siempre que pregunte por su plan, rutina, menu activo o que debe comer hoy o cualquier dia. Puede devolver toda la semana o solo un dia.",
+        parameters: {
+          type: "object",
+          properties: {
+            day: {
+              type: "string",
+              enum: ["hoy", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"],
+              description: "Dia que se quiere consultar. Omitir para obtener el plan completo.",
+            },
+          },
+          required: [],
+        },
       },
     },
     {
@@ -1493,6 +1607,38 @@ function getAgentTools() {
       },
     },
   ];
+}
+
+const PLAN_DAYS = [
+  "lunes",
+  "martes",
+  "miercoles",
+  "jueves",
+  "viernes",
+  "sabado",
+  "domingo",
+];
+
+function resolvePlanDay(value: unknown): string | null {
+  const normalized = normalizePlanDay(value);
+  if (normalized !== "hoy") return normalized;
+
+  const currentDay = new Intl.DateTimeFormat("es-ES", {
+    timeZone: "Europe/Madrid",
+    weekday: "long",
+  }).format(new Date());
+  return normalizePlanDay(currentDay);
+}
+
+function normalizePlanDay(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value
+    .trim()
+    .toLocaleLowerCase("es-ES")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  if (normalized === "hoy" || PLAN_DAYS.includes(normalized)) return normalized;
+  return null;
 }
 
 /// Construye el system + user prompt para generar un plan de comida.

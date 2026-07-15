@@ -99,6 +99,7 @@ Todas las tablas tienen RLS: cada usuario solo ve/edita sus datos.
 2. **chat-proxy** (Edge Function):
    - Valida JWT del usuario
    - Carga perfil + hechos activos + últimos 20 mensajes
+   - Puede consultar el plan alimentario activo completo o por día mediante `get_active_meal_plan`
    - Construye system prompt (perfil + hechos + instrucciones)
    - Llama a `POST /v1beta/openai/chat/completions` con `model=gemini-3.5-flash`, tools, reasoning_effort=medium, stream=true
    - Reintenta errores transitorios con backoff exponencial y usa `gemini-3.1-flash-lite` si 3.5 sigue sin estar disponible
