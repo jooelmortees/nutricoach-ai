@@ -253,6 +253,15 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func handle(event: AgentEvent, assistantMessageId: UUID, conversationId: String) {
+        switch event {
+        case .toolDone(let name, _) where name == "log_water":
+            refreshTrackingSnapshot()
+        case .mealSaved(_, _, _, _, _):
+            refreshTrackingSnapshot()
+        default:
+            break
+        }
+
         guard currentConversationId == conversationId,
               let idx = messages.firstIndex(where: { $0.id == assistantMessageId }) else { return }
         switch event {
@@ -300,6 +309,16 @@ final class ChatViewModel: ObservableObject {
                 if messages[idx].content.isEmpty {
                     messages[idx].content = "Error: \(msg)"
                 }
+            }
+        }
+    }
+
+    private func refreshTrackingSnapshot() {
+        Task {
+            do {
+                try await DailyTrackingService.shared.refreshWidgetSnapshot()
+            } catch {
+                AppLogger.warning("No se pudo refrescar el widget desde el chat: \(error.localizedDescription)")
             }
         }
     }
@@ -441,6 +460,13 @@ final class ChatViewModel: ObservableObject {
                 .from("meals")
                 .insert(payload)
                 .execute()
+            do {
+                try await DailyTrackingService.shared.refreshWidgetSnapshot(
+                    userId: UUID(uuidString: userId)
+                )
+            } catch {
+                AppLogger.warning("No se pudo refrescar el widget tras guardar comida: \(error.localizedDescription)")
+            }
             // Mensaje de confirmacion en el chat
             messages.append(ChatMessage(
                 role: .assistant,

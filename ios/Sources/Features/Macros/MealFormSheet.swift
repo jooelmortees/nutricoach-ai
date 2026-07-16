@@ -1,5 +1,5 @@
 // ============================================================
-// LoggedMealEditorSheet - editor de una comida ya guardada
+// MealFormSheet - alta manual y edicion de comidas
 // ============================================================
 //
 // A diferencia de MealEditorSheet (que trabaja con PendingMeal
@@ -8,9 +8,9 @@
 
 import SwiftUI
 
-struct LoggedMealEditorSheet: View {
-    let meal: LoggedMeal
-    let onSave: (String, String, Double?, Double?, Double?, Double?) async -> Void
+struct MealFormSheet: View {
+    let meal: LoggedMeal?
+    let onSave: (String, String, Double?, Double?, Double?, Double?) async throws -> Void
     @Environment(\.dismiss) private var dismiss
 
     @State private var name: String = ""
@@ -57,7 +57,7 @@ struct LoggedMealEditorSheet: View {
                     } label: {
                         HStack {
                             Image(systemName: "checkmark.circle.fill")
-                            Text("Guardar cambios")
+                            Text(meal == nil ? "Añadir comida" : "Guardar cambios")
                         }
                         .frame(maxWidth: .infinity)
                         .bold()
@@ -65,7 +65,7 @@ struct LoggedMealEditorSheet: View {
                     .disabled(isSaving || name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
-            .navigationTitle("Editar comida")
+            .navigationTitle(meal == nil ? "Nueva comida" : "Editar comida")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -86,6 +86,7 @@ struct LoggedMealEditorSheet: View {
     }
 
     private func populate() {
+        guard let meal else { return }
         name = meal.name
         mealType = meal.meal_type ?? "other"
         if let v = meal.total_kcal { kcalText = String(format: "%.0f", v) }
@@ -115,8 +116,24 @@ struct LoggedMealEditorSheet: View {
         let protein = Double(proteinText.replacingOccurrences(of: ",", with: "."))
         let carbs = Double(carbsText.replacingOccurrences(of: ",", with: "."))
         let fat = Double(fatText.replacingOccurrences(of: ",", with: "."))
-        await onSave(name.trimmingCharacters(in: .whitespaces), mealType, kcal, protein, carbs, fat)
+        guard [kcal, protein, carbs, fat].compactMap({ $0 }).allSatisfy({ $0 >= 0 }) else {
+            errorMessage = "Las macros no pueden ser negativas."
+            isSaving = false
+            return
+        }
+        do {
+            try await onSave(
+                name.trimmingCharacters(in: .whitespaces),
+                mealType,
+                kcal,
+                protein,
+                carbs,
+                fat
+            )
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
         isSaving = false
-        dismiss()
     }
 }

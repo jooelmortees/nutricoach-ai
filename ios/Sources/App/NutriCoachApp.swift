@@ -7,6 +7,7 @@ import Supabase
 
 @main
 struct NutriCoachApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var authManager = AuthManager()
     @StateObject private var appState = AppState()
 
@@ -20,9 +21,26 @@ struct NutriCoachApp: App {
             RootView()
                 .environmentObject(authManager)
                 .environmentObject(appState)
+                .onOpenURL { url in
+                    appState.handle(url: url)
+                }
                 .task {
                     await authManager.restoreSession()
+                    await refreshWidgetSnapshot()
                 }
+                .onChange(of: scenePhase) { _, phase in
+                    guard phase == .active else { return }
+                    Task { await refreshWidgetSnapshot() }
+                }
+        }
+    }
+
+    private func refreshWidgetSnapshot() async {
+        guard authManager.profile != nil else { return }
+        do {
+            try await DailyTrackingService.shared.refreshWidgetSnapshot()
+        } catch {
+            AppLogger.warning("No se pudo actualizar el widget: \(error.localizedDescription)")
         }
     }
 }

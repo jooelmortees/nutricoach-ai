@@ -10,10 +10,7 @@
 | `SUPABASE_ANON_KEY` | `.env` local + GitHub Secret `SUPABASE_ANON_KEY` + Info.plist de iOS (build) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Solo GitHub Secret `SUPABASE_SERVICE_ROLE_KEY` (NUNCA en cliente) |
 | `GEMINI_API_KEY` | Solo GitHub Secret `GEMINI_API_KEY` (NUNCA en cliente) |
-| `APPLE_TEAM_ID` | GitHub Secret + variable |
-| `APPLE_KEY_ID` | GitHub Secret |
-| `APPLE_ISSUER_ID` | GitHub Secret |
-| `APPLE_API_KEY_BASE64` | GitHub Secret (contenido del .p8 en base64) |
+| Certificado y perfiles Apple | Codemagic Code signing identities |
 | `SUPABASE_ACCESS_TOKEN` | Solo local (para `supabase` CLI) |
 | `SUPABASE_PROJECT_REF` | Solo local (para `supabase` CLI) |
 
@@ -39,47 +36,23 @@ Pulsa "New repository secret" para cada uno:
 | `SUPABASE_ANON_KEY` | `eyJ...` |
 | `SUPABASE_SERVICE_ROLE_KEY` | `eyJ...` (MUY sensible) |
 | `GEMINI_API_KEY` | `AIza...` (sensible) |
-| `APPLE_TEAM_ID` | `ABCDE12345` (lo ves en developer.apple.com) |
-| `APPLE_KEY_ID` | `1234567890` (en App Store Connect > Users > Keys) |
-| `APPLE_ISSUER_ID` | `uuid-de-issuer` (en App Store Connect > Users > Keys) |
-| `APPLE_API_KEY_BASE64` | `LS0tLS1...` (contenido del .p8 en base64) |
 | `SUPABASE_ACCESS_TOKEN` | (para `supabase` CLI desde Actions) |
 | `SUPABASE_PROJECT_REF` | (el `ref` de tu proyecto) |
 | `USDA_FDC_API_KEY` | (gratis en fdc.nal.usda.gov) |
 
-### Cómo codificar el .p8 en base64 (en Windows PowerShell)
-
-```powershell
-[Convert]::ToBase64String([System.IO.File]::ReadAllBytes("C:\ruta\a\AuthKey_XXXXX.p8"))
-```
-
-Copia el resultado y pégalo como valor del secret.
-
 ## 3. Variables de iOS (Info.plist via XcodeGen)
 
-Para que la app iOS sepa tu `SUPABASE_URL` y `SUPABASE_ANON_KEY` en build time, se inyectan en `ios/Info.plist`. Hay dos opciones:
-
-### Opción A: Hardcoded en `ios/Sources/Resources/Info.plist`
-Edita ese archivo y reemplaza los placeholders. Es seguro poner el anon key (es público).
-
-### Opción B: Inyectado en build desde GitHub Secrets (recomendado)
-
-Modifica `.github/workflows/build-ios.yml` para que antes del paso "Generate Xcode project" haga:
+La app y la extensión reciben `SUPABASE_URL` y `SUPABASE_ANON_KEY` como build settings. GitHub Actions ya los pasa desde GitHub Secrets:
 
 ```yaml
 - name: Inject config
   env:
     SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
     SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-  run: |
-    cd ios
-    plutil -replace SUPABASE_URL -string "$SUPABASE_URL" Sources/Resources/Info.plist
-    plutil -replace SUPABASE_ANON_KEY -string "$SUPABASE_ANON_KEY" Sources/Resources/Info.plist
+  run: xcodebuild ... SUPABASE_URL="$SUPABASE_URL" SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" build
 ```
 
-Y en `project.yml` define esas keys en `info.properties` con valores vacíos por defecto.
-
-Esto es más limpio y no expone nada en el repo. Lo configuramos en la siguiente iteración.
+Codemagic usa las mismas variables desde el grupo `Supabase`. `ios/project.yml` las expande en los dos `Info.plist` durante la compilación.
 
 ## 4. Variables de Supabase (para Edge Functions)
 

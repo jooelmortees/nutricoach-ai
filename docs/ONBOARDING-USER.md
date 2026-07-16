@@ -6,20 +6,20 @@
 
 - iPhone con iOS 17 o superior
 - Cuenta de Apple Developer Program activa (tienes)
-- App **sideloadly** o **AltStore** instalada en tu PC
-- Apple ID para firmar la app
+- iPhone registrado en los provisioning profiles de la app y del widget
+- Certificado Apple Development y ambos perfiles configurados en Codemagic
+- Una herramienta de instalación que conserve la firma del IPA, como `ideviceinstaller`
 - App **"Health Sync by appyhapps"** (gratis) si quieres datos de tu Huawei Watch GT6 Pro
 
 ## Paso 1: Instalar la app
 
-1. Ve a https://github.com/your-user/nutricoach-ai/actions
-2. Selecciona el workflow **"Build iOS"**
-3. Pulsa "Run workflow" → espera 3-5 minutos
-4. Descarga el artefacto `nutricoach-ipa-Debug` (contiene el `.ipa`)
-5. Abre sideloadly o AltStore
-6. Arrastra el IPA, mete tu Apple ID y contraseña (es un Apple ID de app, no la contraseña principal)
-7. La app se instala como "NutriCoach"
-8. **Importante**: ve a Ajustes > General > VPN y gestión de dispositivos y confía en el certificado
+1. Ejecuta el workflow **`ios-signed`** en Codemagic.
+2. Descarga `NutriCoach-Release.ipa`.
+3. Instala el IPA sin reemplazar su firma de desarrollo.
+4. La app se instala como "NutriCoach" y la extensión queda incluida.
+5. Ve a Ajustes > General > VPN y gestión de dispositivos y confía en el certificado si iOS lo solicita.
+
+El IPA de GitHub Actions sirve para validar compilación. Una re-firma genérica con Sideloadly o AltStore puede eliminar HealthKit, Apple Sign In, App Groups o Keychain Sharing, por lo que no es la ruta de instalación completa.
 
 ## Paso 2: Crear cuenta
 
@@ -91,7 +91,7 @@
 
 ## Renovación del certificado
 
-Con Apple Developer Program, sideloadly firma con tu Apple ID personal → caduca cada **7 días**.
+Con Apple Developer Program, el perfil Development dura lo indicado en el propio perfil. Los **7 días** solo aplican cuando Sideloadly o AltStore vuelve a firmar con un Apple ID gratuito, y esa firma puede no conservar HealthKit, App Groups o Keychain Sharing.
 
 Tienes 3 opciones:
 
@@ -106,9 +106,9 @@ Tienes 3 opciones:
 - Click derecho sobre la app > "Reinstall"
 - 30 segundos y listo
 
-### Opción C: Certificado de desarrollo
-- Necesitas un Mac para generar el certificado de 1 año
-- O usar servicios online de terceros (no recomendado por seguridad)
+### Opción C: IPA firmado por Codemagic
+- Usa el certificado Apple Development y los perfiles de la app y del widget configurados en Codemagic
+- Conserva las capabilities siempre que el dispositivo esté incluido en el perfil
 
 ## Soporte
 

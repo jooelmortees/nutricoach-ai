@@ -24,6 +24,10 @@ struct SettingsView: View {
     @State private var fatTarget: String = ""
     @State private var isSavingTargets: Bool = false
     @State private var targetsSaved: Bool = false
+    @State private var waterTargetMl: Int = 2000
+    @State private var isEditingWaterTarget: Bool = false
+    @State private var isSavingWaterTarget: Bool = false
+    @State private var waterTargetError: String?
 
     // Clave compartida con HealthKitManager para leer el timestamp de ultima sync.
     // La fuente de verdad es `HealthKitManager.lastSyncKey` (privado al modulo);
@@ -241,6 +245,50 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                // MARK: - Hidratacion
+                Section("Hidratacion") {
+                    if isEditingWaterTarget {
+                        Stepper(
+                            value: $waterTargetMl,
+                            in: 250...10000,
+                            step: 250
+                        ) {
+                            LabeledContent(
+                                "Objetivo de agua",
+                                value: "\(waterTargetMl) ml"
+                            )
+                        }
+                        Button {
+                            Task { await saveWaterTarget() }
+                        } label: {
+                            HStack {
+                                if isSavingWaterTarget {
+                                    ProgressView().controlSize(.small)
+                                }
+                                Text(isSavingWaterTarget ? "Guardando..." : "Guardar objetivo de agua")
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .disabled(isSavingWaterTarget)
+                    } else {
+                        LabeledContent(
+                            "Objetivo de agua",
+                            value: "\(auth.profile?.dailyWaterTargetMl ?? 2000) ml/dia"
+                        )
+                        Button {
+                            waterTargetMl = auth.profile?.dailyWaterTargetMl ?? 2000
+                            isEditingWaterTarget = true
+                        } label: {
+                            Label("Editar objetivo de agua", systemImage: "drop.fill")
+                        }
+                    }
+                    if let waterTargetError {
+                        Text(waterTargetError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+
                 // MARK: - Agente
                 Section("Agente") {
                     NavigationLink {
@@ -293,6 +341,7 @@ struct SettingsView: View {
             .preferredColorScheme(colorScheme)
             .task {
                 refreshHealthKit()
+                waterTargetMl = auth.profile?.dailyWaterTargetMl ?? 2000
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
                 // El usuario pudo haber cambiado permisos en Ajustes de iOS
@@ -387,9 +436,44 @@ struct SettingsView: View {
                 .execute()
             // Refrescar el perfil en AuthManager
             await auth.refreshProfile()
+            do {
+                try await DailyTrackingService.shared.refreshWidgetSnapshot()
+            } catch {
+                AppLogger.warning("No se pudo refrescar el widget tras guardar macros: \(error.localizedDescription)")
+            }
             targetsSaved = false
         } catch {
             healthKitError = "Error guardando objetivo: \(error.localizedDescription)"
         }
+    }
+
+    private func saveWaterTarget() async {
+        guard let userId = auth.profile?.id.uuidString else {
+            waterTargetError = "No hay una sesion de usuario valida."
+            return
+        }
+        struct UpdatePayload: Encodable {
+            let daily_water_target_ml: Int
+        }
+
+        isSavingWaterTarget = true
+        waterTargetError = nil
+        do {
+            try await SupabaseService.shared.client
+                .from("profiles")
+                .update(UpdatePayload(daily_water_target_ml: waterTargetMl))
+                .eq("id", value: userId)
+                .execute()
+            await auth.refreshProfile()
+            do {
+                try await DailyTrackingService.shared.refreshWidgetSnapshot()
+            } catch {
+                AppLogger.warning("No se pudo refrescar el widget tras guardar agua: \(error.localizedDescription)")
+            }
+            isEditingWaterTarget = false
+        } catch {
+            waterTargetError = "No se pudo guardar: \(error.localizedDescription)"
+        }
+        isSavingWaterTarget = false
     }
 }

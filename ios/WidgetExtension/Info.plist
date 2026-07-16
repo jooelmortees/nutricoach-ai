@@ -2,22 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleDisplayName</key>
+    <string>NutriCoach</string>
     <key>SUPABASE_URL</key>
     <string>$(SUPABASE_URL)</string>
     <key>SUPABASE_ANON_KEY</key>
     <string>$(SUPABASE_ANON_KEY)</string>
     <key>NutriCoachKeychainAccessGroup</key>
     <string>$(AppIdentifierPrefix)com.joelmortees.nutricoach.shared</string>
-    <key>CFBundleURLTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleURLName</key>
-            <string>com.joelmortees.nutricoach</string>
-            <key>CFBundleURLSchemes</key>
-            <array>
-                <string>nutricoach</string>
-            </array>
-        </dict>
-    </array>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.widgetkit-extension</string>
+    </dict>
 </dict>
 </plist>

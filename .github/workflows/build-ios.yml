@@ -1,7 +1,7 @@
 # ============================================================
 # Build iOS sin Mac
 # Compila el proyecto Xcode en un runner macOS-arm64 de GitHub Actions
-# y genera un IPA listo para sideloadly
+# y genera un IPA sin firma para que Sideloadly o AltStore lo firme
 # ============================================================
 
 name: Build iOS
@@ -20,11 +20,6 @@ on:
     paths:
       - "ios/**"
       - ".github/workflows/build-ios.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "ios/**"
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -36,9 +31,8 @@ jobs:
     timeout-minutes: 30
 
     env:
-      BUNDLE_ID: ${{ vars.APPLE_BUNDLE_ID || 'com.joelmortees.nutricoach' }}
-      DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
-      KEYCHAIN_PASSWORD: ${{ github.run_id }}-kc-pwd
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
     steps:
       - name: Checkout
@@ -46,7 +40,6 @@ jobs:
 
       - name: Show Xcode version
         run: xcodebuild -version
-        # Esperado: Xcode 16.x con iOS 18 SDK
 
       - name: Show SDKs
         run: xcodebuild -showsdks
@@ -71,10 +64,12 @@ jobs:
           cd ios
           xcodegen generate
 
-      - name: Verify Bundle ID
+      - name: Validate Supabase configuration
         run: |
-          echo "Bundle ID: $BUNDLE_ID"
-          echo "Team ID: $DEVELOPMENT_TEAM"
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "ERROR: faltan SUPABASE_URL o SUPABASE_ANON_KEY en GitHub Secrets"
+            exit 1
+          fi
 
       - name: Resolve SPM dependencies
         run: |
@@ -83,9 +78,6 @@ jobs:
             -project NutriCoach.xcodeproj \
             -scheme NutriCoach
 
-      # ------------------------------------------------------------
-      # 1) Build (sin firmar) para validar que todo compila
-      # ------------------------------------------------------------
       - name: Build (no signing)
         run: |
           mkdir -p build
@@ -101,64 +93,32 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            SUPABASE_URL="$SUPABASE_URL" \
+            SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
             build | tee build/xcodebuild.log | tail -100
 
-      # ------------------------------------------------------------
-      # 2) Build con firma para generar IPA instalable
-      # ------------------------------------------------------------
-      - name: Import Apple Developer certificate
-        if: env.DEVELOPMENT_TEAM != ''
-        env:
-          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
-          APPLE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
-          APPLE_ISSUER_ID: ${{ secrets.APPLE_ISSUER_ID }}
+      - name: Verify widget embedding
         run: |
-          set -euo pipefail
+          CONFIGURATION="${{ inputs.configuration || 'Debug' }}"
+          APP_PATH="build/DerivedData/Build/Products/${CONFIGURATION}-iphoneos/NutriCoach.app"
+          WIDGET_PATH="$APP_PATH/PlugIns/NutriCoachWidgets.appex"
+          if [ -z "$APP_PATH" ] || [ ! -d "$WIDGET_PATH" ]; then
+            echo "ERROR: NutriCoachWidgets.appex no esta embebida en NutriCoach.app"
+            find build/DerivedData/Build/Products -maxdepth 5 -print
+            exit 1
+          fi
+          echo "Widget embebido: $WIDGET_PATH"
 
-          # Crear keychain temporal
-          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
-
-          # Decodificar API key
-          API_KEY_PATH=$RUNNER_TEMP/AuthKey_${APPLE_KEY_ID}.p8
-          echo "$APPLE_API_KEY_BASE64" | base64 --decode > "$API_KEY_PATH"
-
-          # Listar signing identities disponibles (profiling)
-          security find-identity -v -p codesigning
-
-      - name: Build (signed for sideloadly)
-        if: env.DEVELOPMENT_TEAM != ''
+      - name: Create unsigned IPA
         run: |
-          set -o pipefail
-          xcodebuild \
-            -project ios/NutriCoach.xcodeproj \
-            -scheme NutriCoach \
-            -configuration Release \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath build/DerivedData \
-            -allowProvisioningUpdates \
-            -skipPackagePluginValidation \
-            -skipMacroValidation \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Development" \
-            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
-            build | tee build/xcodebuild-signed.log | tail -50
-
-      - name: Create IPA
-        if: env.DEVELOPMENT_TEAM != ''
-        run: |
-          APP_PATH=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
+          CONFIGURATION="${{ inputs.configuration || 'Debug' }}"
+          APP_PATH="build/DerivedData/Build/Products/${CONFIGURATION}-iphoneos/NutriCoach.app"
           echo "App path: $APP_PATH"
-
+          rm -rf build/Payload
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
-
           cd build
-          zip -qr NutriCoach-${{ inputs.configuration || 'Debug' }}.ipa Payload
+          zip -qr "NutriCoach-${CONFIGURATION}-unsigned.ipa" Payload
           ls -lh NutriCoach-*.ipa
 
       - name: Upload artifact (IPA + logs)
@@ -168,14 +128,5 @@ jobs:
           path: |
             build/NutriCoach-*.ipa
             build/xcodebuild.log
-            build/xcodebuild-signed.log
           retention-days: 30
-          if-no-files-found: warn
-
-      - name: Cleanup keychain
-        if: always()
-        run: |
-          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
-          if [ -f "$KEYCHAIN_PATH" ]; then
-            security delete-keychain "$KEYCHAIN_PATH" || true
-          fi
+          if-no-files-found: error

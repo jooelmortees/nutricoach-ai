@@ -21,6 +21,8 @@
 | `analyze_meal_text` | nutrition | 1 |
 | `log_meal` | nutrition | 2 |
 | `get_meal_history` | nutrition | 2 |
+| `get_water_summary` | direct | 1 ✅ |
+| `log_water` | direct | 1 ✅ |
 | `scan_barcode` | nutrition | 2 |
 | `calculate_tdee` | nutrition | 1 ✅ |
 | `calculate_macros` | nutrition | 1 ✅ |

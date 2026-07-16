@@ -127,9 +127,9 @@ Todas las tablas tienen RLS: cada usuario solo ve/edita sus datos.
 ## Por qué NO compilamos en local
 
 - Joel no tiene Mac
-- GitHub Actions runners `macos-15-arm64` incluyen Xcode 16 con iOS 18 SDK preinstalados
-- Compilamos el .xcarchive, exportamos a IPA con nuestro Apple Developer cert
-- Joel descarga el IPA y lo instala con sideloadly o AltStore
+- GitHub Actions valida la compilación y empaqueta un IPA sin firma
+- Codemagic compila y firma la app y la extensión con sus perfiles de desarrollo
+- Para conservar HealthKit, Apple Sign In, App Groups y Keychain Sharing se usa el IPA firmado de Codemagic
 
 ## Por qué NO publicamos en App Store
 

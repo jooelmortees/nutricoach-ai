@@ -6,8 +6,12 @@ import SwiftUI
 
 struct MacrosView: View {
     @EnvironmentObject var auth: AuthManager
+    @EnvironmentObject var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = MacrosViewModel()
     @State private var editingMeal: LoggedMeal?
+    @State private var showingNewMeal = false
+    @State private var showingCustomWater = false
     @State private var mealToDelete: LoggedMeal?
     @State private var showDeleteConfirm = false
 
@@ -20,6 +24,15 @@ struct MacrosView: View {
                     }
                     MacrosSummaryCards(viewModel: viewModel)
                     TargetComparisonView(viewModel: viewModel)
+                    WaterTrackerCard(
+                        consumedMl: viewModel.waterTotalMl,
+                        targetMl: viewModel.profile?.dailyWaterTargetMl ?? 2000,
+                        latestLog: viewModel.waterLogs.last,
+                        isMutating: viewModel.isWaterMutating || viewModel.isLoading,
+                        onAdd: addWater,
+                        onCustom: { showingCustomWater = true },
+                        onUndo: undoWater
+                    )
                     MealsListView(
                         viewModel: viewModel,
                         onEdit: { editingMeal = $0 },
@@ -33,36 +46,93 @@ struct MacrosView: View {
             }
             .navigationTitle("Macros")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
-                        Task { await viewModel.refresh() }
+                        presentNewMeal()
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .help("Añadir comida")
+                    .disabled(viewModel.isWaterMutating)
+
+                    Button {
+                        Task {
+                            await viewModel.refresh(userId: auth.profile?.id.uuidString)
+                        }
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
+                    .help("Actualizar")
+                    .disabled(viewModel.isWaterMutating)
                 }
             }
             .task {
                 await viewModel.load(userId: auth.profile?.id.uuidString)
+                handlePendingRoute(appState.pendingRoute)
+            }
+            .onChange(of: appState.pendingRoute) { _, route in
+                handlePendingRoute(route)
+            }
+            .onChange(of: viewModel.isWaterMutating) { _, isMutating in
+                if !isMutating {
+                    handlePendingRoute(appState.pendingRoute)
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                Task {
+                    await viewModel.handleDayChange(
+                        userId: auth.profile?.id.uuidString
+                    )
+                }
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: .NSCalendarDayChanged
+                )
+            ) { _ in
+                Task {
+                    await viewModel.handleDayChange(
+                        userId: auth.profile?.id.uuidString
+                    )
+                }
             }
             .refreshable {
                 await viewModel.refresh(userId: auth.profile?.id.uuidString)
             }
             .sheet(item: $editingMeal) { meal in
-                LoggedMealEditorSheet(meal: meal) { name, type, kcal, p, c, f in
-                    do {
-                        try await viewModel.updateMeal(
-                            meal,
-                            name: name,
-                            mealType: type,
-                            kcal: kcal,
-                            protein: p,
-                            carbs: c,
-                            fat: f,
-                            userId: auth.profile?.id.uuidString
-                        )
-                    } catch {
-                        viewModel.errorMessage = "Error guardando: \(error.localizedDescription)"
-                    }
+                MealFormSheet(meal: meal) { name, type, kcal, p, c, f in
+                    try await viewModel.updateMeal(
+                        meal,
+                        name: name,
+                        mealType: type,
+                        kcal: kcal,
+                        protein: p,
+                        carbs: c,
+                        fat: f,
+                        userId: auth.profile?.id.uuidString
+                    )
+                }
+            }
+            .sheet(isPresented: $showingNewMeal) {
+                MealFormSheet(meal: nil) { name, type, kcal, p, c, f in
+                    try await viewModel.addMeal(
+                        name: name,
+                        mealType: type,
+                        kcal: kcal,
+                        protein: p,
+                        carbs: c,
+                        fat: f,
+                        userId: auth.profile?.id.uuidString
+                    )
+                }
+            }
+            .sheet(isPresented: $showingCustomWater) {
+                WaterAmountSheet { amountMl in
+                    try await viewModel.addWater(
+                        amountMl: amountMl,
+                        userId: auth.profile?.id.uuidString
+                    )
                 }
             }
             .confirmationDialog(
@@ -80,6 +150,66 @@ struct MacrosView: View {
                     mealToDelete = nil
                 }
             }
+            .alert(
+                "No se pudo completar la accion",
+                isPresented: Binding(
+                    get: { viewModel.errorMessage != nil },
+                    set: { if !$0 { viewModel.errorMessage = nil } }
+                )
+            ) {
+                Button("Aceptar") { viewModel.errorMessage = nil }
+            } message: {
+                Text(viewModel.errorMessage ?? "Error desconocido")
+            }
+        }
+    }
+
+    private func addWater(_ amountMl: Int) {
+        Task {
+            do {
+                try await viewModel.addWater(
+                    amountMl: amountMl,
+                    userId: auth.profile?.id.uuidString
+                )
+            } catch {
+                viewModel.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func undoWater() {
+        Task {
+            do {
+                try await viewModel.deleteLatestWater(
+                    userId: auth.profile?.id.uuidString
+                )
+            } catch {
+                viewModel.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func handlePendingRoute(_ route: AppState.Route?) {
+        switch route {
+        case .some(.newMeal):
+            guard !viewModel.isWaterMutating else { return }
+            appState.consume(route: .newMeal)
+            presentNewMeal()
+        case .some(.macros):
+            appState.consume(route: .macros)
+        case .none:
+            break
+        }
+    }
+
+    private func presentNewMeal() {
+        guard !viewModel.isWaterMutating else { return }
+        Task {
+            await viewModel.selectDate(
+                Date(),
+                userId: auth.profile?.id.uuidString
+            )
+            showingNewMeal = true
         }
     }
 }
@@ -91,7 +221,7 @@ struct MacroHeatmapCalendar: View {
     let userId: String?
     let onSelectDate: (Date) -> Void
 
-    private let calendar = Calendar.current
+    private var calendar: Calendar { viewModel.calendar }
     private let weekdays = ["L", "M", "X", "J", "V", "S", "D"]
 
     var body: some View {
@@ -301,6 +431,136 @@ struct TargetComparisonView: View {
         }
         .padding()
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct WaterTrackerCard: View {
+    let consumedMl: Int
+    let targetMl: Int
+    let latestLog: WaterLog?
+    let isMutating: Bool
+    let onAdd: (Int) -> Void
+    let onCustom: () -> Void
+    let onUndo: () -> Void
+
+    private var progress: Double {
+        guard targetMl > 0 else { return 0 }
+        return min(Double(consumedMl) / Double(targetMl), 1)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Label("Agua", systemImage: "drop.fill")
+                    .font(.headline)
+                    .foregroundStyle(.cyan)
+                Spacer()
+                Text("\(consumedMl) / \(targetMl) ml")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            ProgressView(value: progress)
+                .tint(consumedMl > targetMl ? .blue : .cyan)
+
+            HStack(spacing: 8) {
+                waterButton(amountMl: 250)
+                waterButton(amountMl: 500)
+                Button(action: onCustom) {
+                    Image(systemName: "ellipsis")
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                }
+                .buttonStyle(.bordered)
+                .disabled(isMutating)
+                .help("Otra cantidad")
+
+                Button(action: onUndo) {
+                    Image(systemName: "arrow.uturn.backward")
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.bordered)
+                .disabled(latestLog == nil || isMutating)
+                .help("Deshacer el ultimo vaso")
+            }
+
+            if let latestLog {
+                Text("Ultimo: \(latestLog.amountMl) ml a las \(latestLog.date.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding()
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func waterButton(amountMl: Int) -> some View {
+        Button { onAdd(amountMl) } label: {
+            Label("\(amountMl) ml", systemImage: "plus")
+                .font(.caption)
+                .frame(maxWidth: .infinity, minHeight: 32)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.cyan)
+        .disabled(isMutating)
+    }
+}
+
+struct WaterAmountSheet: View {
+    let onAdd: (Int) async throws -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var amountText = "250"
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Cantidad") {
+                    HStack {
+                        TextField("250", text: $amountText)
+                            .keyboardType(.numberPad)
+                        Text("ml")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Anadir agua")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancelar") { dismiss() }
+                        .disabled(isSaving)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Anadir") { Task { await save() } }
+                        .disabled(isSaving || amountText.isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func save() async {
+        guard let amountMl = Int(amountText), (1...5000).contains(amountMl) else {
+            errorMessage = "Introduce una cantidad entre 1 y 5000 ml."
+            return
+        }
+        isSaving = true
+        errorMessage = nil
+        do {
+            try await onAdd(amountMl)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isSaving = false
     }
 }
 

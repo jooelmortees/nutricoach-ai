@@ -23,16 +23,23 @@ final class AuthManager: ObservableObject {
     private let supabase = SupabaseService.shared.client
 
     func restoreSession() async {
+        profile = nil
         do {
             let session = try await supabase.auth.session
             let user = session.user
             await loadProfile(userId: user.id)
             state = .signedIn(user: user)
+            await refreshTrackingSnapshot(userId: user.id)
             AppLogger.info("Sesión restaurada: \(user.id)")
         } catch {
-            // Sin sesión activa: esto es normal en primer arranque
+            do {
+                try await supabase.auth.signOut(scope: .local)
+            } catch {
+                AppLogger.warning("No se pudo limpiar la sesion local: \(error.localizedDescription)")
+            }
+            DailyTrackingService.shared.clearWidgetSnapshot()
             state = .signedOut
-            AppLogger.info("Sin sesión activa al arrancar")
+            AppLogger.info("No se pudo restaurar una sesion valida")
         }
     }
 
@@ -41,8 +48,10 @@ final class AuthManager: ObservableObject {
             email: email,
             password: password
         )
+        profile = nil
         await loadProfile(userId: session.user.id)
         state = .signedIn(user: session.user)
+        await refreshTrackingSnapshot(userId: session.user.id)
     }
 
     func signUp(email: String, password: String, fullName: String?) async throws {
@@ -55,8 +64,10 @@ final class AuthManager: ObservableObject {
             password: password,
             data: userData
         )
+        profile = nil
         await loadProfile(userId: response.user.id)
         state = .signedIn(user: response.user)
+        await refreshTrackingSnapshot(userId: response.user.id)
     }
 
     /// Sign In with Apple: extrae el identityToken de la credencial de Apple
@@ -88,12 +99,15 @@ final class AuthManager: ObservableObject {
                 )
             }
         }
+        profile = nil
         await loadProfile(userId: session.user.id)
         state = .signedIn(user: session.user)
+        await refreshTrackingSnapshot(userId: session.user.id)
     }
 
     func signOut() async {
         try? await supabase.auth.signOut()
+        DailyTrackingService.shared.clearWidgetSnapshot()
         profile = nil
         state = .signedOut
     }
@@ -118,6 +132,7 @@ final class AuthManager: ObservableObject {
         }
         // Si todo fue bien, cerrar sesion local
         try? await supabase.auth.signOut()
+        DailyTrackingService.shared.clearWidgetSnapshot()
         profile = nil
         state = .signedOut
         AppLogger.info("Cuenta eliminada permanentemente")
@@ -203,6 +218,15 @@ final class AuthManager: ObservableObject {
     func refreshProfile() async {
         guard let userId = profile?.id else { return }
         await loadProfile(userId: userId)
+    }
+
+    private func refreshTrackingSnapshot(userId: UUID) async {
+        guard profile != nil else { return }
+        do {
+            try await DailyTrackingService.shared.refreshWidgetSnapshot(userId: userId)
+        } catch {
+            AppLogger.warning("No se pudo actualizar el widget tras autenticar: \(error.localizedDescription)")
+        }
     }
 }
 

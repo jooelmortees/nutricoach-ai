@@ -29,7 +29,7 @@ settings:
 packages:
   Supabase:
     url: https://github.com/supabase/supabase-swift
-    from: 2.41.0
+    exactVersion: 2.52.0
   KeychainAccess:
     url: https://github.com/kishikawakatsumi/KeychainAccess
     from: 4.2.2
@@ -53,6 +53,13 @@ targets:
         CFBundleDisplayName: NutriCoach
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
+        SUPABASE_URL: "$(SUPABASE_URL)"
+        SUPABASE_ANON_KEY: "$(SUPABASE_ANON_KEY)"
+        NutriCoachKeychainAccessGroup: "$(AppIdentifierPrefix)com.joelmortees.nutricoach.shared"
+        CFBundleURLTypes:
+          - CFBundleURLName: com.joelmortees.nutricoach
+            CFBundleURLSchemes:
+              - nutricoach
         UILaunchScreen:
           UIColorName: ""
         UIApplicationSceneManifest:
@@ -90,18 +97,75 @@ targets:
       path: Sources/Resources/NutriCoach.entitlements
       properties:
         com.apple.developer.healthkit: true
+        com.apple.developer.applesignin:
+          - Default
         aps-environment: development
+        com.apple.security.application-groups:
+          - group.com.joelmortees.nutricoach
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.joelmortees.nutricoach
+          - $(AppIdentifierPrefix)com.joelmortees.nutricoach.shared
     dependencies:
       - package: Supabase
         product: Supabase
       - package: KeychainAccess
       - package: SwiftStreamingMarkdown
         product: SwiftStreamingMarkdown
+      - target: NutriCoachWidgets
+        embed: true
       - sdk: HealthKit.framework
       - sdk: AVFoundation.framework
       - sdk: Photos.framework
       - sdk: UserNotifications.framework
       - sdk: AuthenticationServices.framework
+
+  NutriCoachWidgets:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: WidgetExtension
+      - path: Sources/Shared
+      - path: Sources/Models/Models.swift
+      - path: Sources/Services/Config.swift
+      - path: Sources/Services/DateParsing.swift
+      - path: Sources/Services/SupabaseClient.swift
+      - path: Sources/Services/DailyTrackingService.swift
+    info:
+      path: WidgetExtension/Info.plist
+      properties:
+        CFBundleDisplayName: NutriCoach
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        SUPABASE_URL: "$(SUPABASE_URL)"
+        SUPABASE_ANON_KEY: "$(SUPABASE_ANON_KEY)"
+        NutriCoachKeychainAccessGroup: "$(AppIdentifierPrefix)com.joelmortees.nutricoach.shared"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.joelmortees.nutricoach.widgets
+        PRODUCT_NAME: NutriCoachWidgets
+        TARGETED_DEVICE_FAMILY: "1"
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_PREVIEWS: NO
+        ENABLE_DEBUG_DYLIB: NO
+        SWIFT_ENABLE_PREVIEWS: NO
+    entitlements:
+      path: WidgetExtension/NutriCoachWidgets.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.joelmortees.nutricoach
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.joelmortees.nutricoach.shared
+    dependencies:
+      - package: Supabase
+        product: Supabase
+      - package: KeychainAccess
+      - sdk: WidgetKit.framework
+      - sdk: AppIntents.framework
 
   NutriCoachTests:
     type: bundle.unit-test

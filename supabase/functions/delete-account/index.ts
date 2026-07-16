@@ -50,6 +50,7 @@ serve(async (req) => {
       "conversations",
       "meal_items",
       "meals",
+      "water_logs",
       "recipes",
       "meal_plans",
       "health_metrics",
@@ -103,10 +104,7 @@ serve(async (req) => {
 
     // 6. Borrar el usuario de auth.users (esto borra el perfil en cascade
     //    por la FK profiles.id -> auth.users.id con ON DELETE CASCADE)
-    const { error: deleteErr } = await supabaseAdmin.auth.admin.deleteUser(
-      user.id,
-      { shouldRevokeSessions: true }
-    );
+    const { error: deleteErr } = await supabaseAdmin.auth.admin.deleteUser(user.id);
     if (deleteErr) {
       return jsonError(500, `Error borrando usuario de auth: ${deleteErr.message}`);
     }

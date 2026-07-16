@@ -171,6 +171,13 @@ final class PlansViewModel: ObservableObject {
                 .from("meals")
                 .insert(payload)
                 .execute()
+            do {
+                try await DailyTrackingService.shared.refreshWidgetSnapshot(
+                    userId: UUID(uuidString: userId)
+                )
+            } catch {
+                AppLogger.warning("No se pudo refrescar el widget tras registrar el plan: \(error.localizedDescription)")
+            }
             return true
         } catch {
             errorMessage = "Error registrando comida: \(error.localizedDescription)"

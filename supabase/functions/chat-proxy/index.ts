@@ -369,6 +369,7 @@ serve(async (req) => {
                   user.id,
                   profile,
                   facts,
+                  tc.id,
                   controller,
                   encoder,
                 );
@@ -551,6 +552,7 @@ serve(async (req) => {
                 user.id,
                 profile,
                 facts,
+                tc.id,
                 controller,
                 encoder,
               );
@@ -1096,6 +1098,7 @@ async function executeToolWithKeepAlive(
   userId: string,
   profile: any,
   facts: any[],
+  toolCallId: string | undefined,
   controller: ReadableStreamDefaultController<Uint8Array>,
   encoder: TextEncoder,
 ): Promise<ToolResult> {
@@ -1108,7 +1111,7 @@ async function executeToolWithKeepAlive(
     }
   }, 10_000);
   try {
-    return await executeTool(name, args, supabase, userId, profile, facts);
+    return await executeTool(name, args, supabase, userId, profile, facts, toolCallId);
   } finally {
     clearInterval(intervalId);
   }
@@ -1120,7 +1123,8 @@ async function executeTool(
   supabase: any,
   userId: string,
   profile: any,
-  facts: any[]
+  facts: any[],
+  toolCallId?: string,
 ): Promise<ToolResult> {
   try {
     switch (name) {
@@ -1185,6 +1189,82 @@ async function executeTool(
         return {
           content: JSON.stringify({ meals: data ?? [], count: data?.length ?? 0 }),
           summary: `${data?.length ?? 0} comidas de los ultimos 7 dias`
+        };
+      }
+      case "get_water_summary": {
+        const summary = await fetchWaterSummary(supabase, userId, profile);
+        return {
+          content: JSON.stringify({ ok: true, ...summary }),
+          summary: `${summary.consumed_ml} de ${summary.target_ml} ml de agua hoy`,
+        };
+      }
+      case "log_water": {
+        const amountMl = Number(args?.amount_ml);
+        if (!Number.isInteger(amountMl) || amountMl < 1 || amountMl > 5000) {
+          return {
+            content: JSON.stringify({
+              ok: false,
+              error: "amount_ml debe ser un entero entre 1 y 5000",
+            }),
+            summary: "Cantidad de agua no valida",
+          };
+        }
+
+        let loggedAt = new Date();
+        if (args?.logged_at !== undefined) {
+          if (typeof args.logged_at !== "string") {
+            return {
+              content: JSON.stringify({ ok: false, error: "logged_at debe ser una fecha ISO" }),
+              summary: "Fecha de agua no valida",
+            };
+          }
+          loggedAt = new Date(args.logged_at);
+          if (Number.isNaN(loggedAt.getTime())) {
+            return {
+              content: JSON.stringify({ ok: false, error: "logged_at no es una fecha ISO valida" }),
+              summary: "Fecha de agua no valida",
+            };
+          }
+        }
+        if (loggedAt.getTime() > Date.now() + 5 * 60 * 1000) {
+          return {
+            content: JSON.stringify({ ok: false, error: "No se puede registrar agua en el futuro" }),
+            summary: "Fecha de agua futura rechazada",
+          };
+        }
+
+        const rawEventId = typeof toolCallId === "string" && toolCallId.length > 0
+          ? toolCallId
+          : crypto.randomUUID();
+        const clientEventId = `agent:${rawEventId}`.slice(0, 128);
+        const { error } = await supabase
+          .from("water_logs")
+          .upsert({
+            user_id: userId,
+            amount_ml: amountMl,
+            logged_at: loggedAt.toISOString(),
+            source: "agent",
+            client_event_id: clientEventId,
+          }, {
+            onConflict: "user_id,client_event_id",
+            ignoreDuplicates: true,
+          });
+        if (error) {
+          return {
+            content: JSON.stringify({ ok: false, error: error.message }),
+            summary: "Error registrando agua",
+          };
+        }
+
+        const summary = await fetchWaterSummary(supabase, userId, profile);
+        return {
+          content: JSON.stringify({
+            ok: true,
+            registered_ml: amountMl,
+            logged_at: loggedAt.toISOString(),
+            ...summary,
+          }),
+          summary: `${amountMl} ml registrados; hoy lleva ${summary.consumed_ml} ml`,
         };
       }
       case "get_active_meal_plan": {
@@ -1469,13 +1549,15 @@ function buildSystemPrompt(profile: any, facts: any[]): string {
 
   const profileText = profile
     ? `\n\nPERFIL DEL USUARIO:\n- Nombre: ${profile.full_name ?? "no indicado"}\n- Objetivo: ${profile.goal ?? "no indicado"}\n- Peso: ${profile.weight_kg ?? "?"} kg, Altura: ${profile.height_cm ?? "?"} cm` +
-      (profile.daily_kcal_target ? `\n- Objetivo diario: ${profile.daily_kcal_target} kcal (${profile.daily_protein_g ?? "?"}P / ${profile.daily_carbs_g ?? "?"}C / ${profile.daily_fat_g ?? "?"}G)` : "")
+      (profile.daily_kcal_target ? `\n- Objetivo diario: ${profile.daily_kcal_target} kcal (${profile.daily_protein_g ?? "?"}P / ${profile.daily_carbs_g ?? "?"}C / ${profile.daily_fat_g ?? "?"}G)` : "") +
+      `\n- Objetivo de agua: ${profile.daily_water_target_ml ?? 2000} ml`
     : "";
 
   // Fecha y hora exacta para que el agente sepa en que momento esta respondiendo
   const ahora = new Date();
-  const fechaHora = ahora.toLocaleString("es-ES", { timeZone: "Europe/Madrid", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" });
-  const diaSemana = ahora.toLocaleDateString("es-ES", { timeZone: "Europe/Madrid", weekday: "long" });
+  const timeZone = resolveTimeZone(profile?.timezone);
+  const fechaHora = ahora.toLocaleString("es-ES", { timeZone, weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" });
+  const diaSemana = ahora.toLocaleDateString("es-ES", { timeZone, weekday: "long" });
   const fechaISO = ahora.toISOString();
 
   return `Eres NutriCoach, un dietista-nutricionista español con 15 años de experiencia, especializado en nutrición clínica y deportiva. Hablas en español de España, en tono cercano y directo, basado en evidencia. No sustituyes a un médico.
@@ -1484,7 +1566,7 @@ CONTEXTO TEMPORAL:
 - Fecha y hora actual: ${fechaHora}
 - Día de la semana: ${diaSemana}
 - Fecha ISO: ${fechaISO}
-- Zona horaria del usuario: Europe/Madrid (UTC+1 o UTC+2 en horario de verano)
+- Zona horaria del usuario: ${timeZone}
 Usa esta información para contextualizar tus respuestas (ej: "¿qué has comido hoy?", "¿cómo te fue anoche durmiendo?").
 
 TUS REGLAS:
@@ -1495,6 +1577,8 @@ TUS REGLAS:
 5. USA LAS HERRAMIENTAS (tools) en lugar de inventar datos:
    - get_user_profile: para recordar el perfil completo
    - get_recent_meals: para ver qué ha comido esta semana
+   - get_water_summary: para ver cuanta agua lleva hoy y cuanto le falta
+   - log_water: para registrar agua que el usuario afirma haber bebido
    - get_active_meal_plan: para leer el plan o rutina alimentaria activa, completo o por dia
    - get_health_metrics: para ver peso, pasos, FC, etc. de la última semana
    - remember_fact: para guardar info importante que el usuario te cuente (alergia, preferencia, objetivo)
@@ -1503,6 +1587,7 @@ TUS REGLAS:
 6. ANTES de pedir datos al usuario, CONSULTA las herramientas. Solo pregunta si no puedes obtener la info.
 7. Si el usuario no tiene objetivo diario configurado, pregúntale sus datos (peso, altura, edad, sexo, nivel de actividad, objetivo) y usa calculate_daily_target para calcularlo.
 8. Si pregunta por su plan, rutina, menu activo o que debe comer un dia, llama SIEMPRE a get_active_meal_plan antes de responder. No afirmes que no puedes ver el plan sin consultar esta herramienta.
+9. Si pregunta por su hidratacion de hoy, llama SIEMPRE a get_water_summary. Si afirma claramente que ha bebido agua o pide registrarla, llama a log_water. Un "vaso" sin tamano indicado equivale a 250 ml. No registres recomendaciones ni intenciones futuras como si ya hubieran ocurrido.
 
 FORMATO DE MACROS PARA COMIDAS:
 Cuando el usuario te describa una comida o envíe una foto, tu respuesta DEBE empezar con un bloque JSON válido con este formato EXACTO:
@@ -1549,6 +1634,37 @@ function getAgentTools() {
         name: "get_recent_meals",
         description: "Obtiene las comidas registradas en los ultimos 7 dias con sus macros.",
         parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_water_summary",
+        description: "Obtiene el agua registrada hoy, el objetivo diario y la cantidad restante segun la zona horaria del usuario.",
+        parameters: { type: "object", properties: {}, required: [] },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "log_water",
+        description: "Registra agua que el usuario confirma haber bebido. Si dice 'un vaso' sin indicar tamano, usar 250 ml. No usar para recomendaciones o planes futuros.",
+        parameters: {
+          type: "object",
+          properties: {
+            amount_ml: {
+              type: "integer",
+              minimum: 1,
+              maximum: 5000,
+              description: "Cantidad de agua bebida en mililitros.",
+            },
+            logged_at: {
+              type: "string",
+              description: "Fecha y hora ISO 8601. Omitir para registrar ahora.",
+            },
+          },
+          required: ["amount_ml"],
+        },
       },
     },
     {
@@ -1676,4 +1792,126 @@ function normalizePlanDay(value: unknown): string | null {
     .replace(/[\u0300-\u036f]/g, "");
   if (normalized === "hoy" || PLAN_DAYS.includes(normalized)) return normalized;
   return null;
+}
+
+async function fetchWaterSummary(
+  supabase: any,
+  userId: string,
+  profile: any,
+) {
+  const timeZone = resolveTimeZone(profile?.timezone);
+  const bounds = getTodayBounds(timeZone);
+  const { data, error } = await supabase
+    .from("water_logs")
+    .select("amount_ml, logged_at, source")
+    .eq("user_id", userId)
+    .gte("logged_at", bounds.start.toISOString())
+    .lt("logged_at", bounds.end.toISOString())
+    .order("logged_at", { ascending: true });
+  if (error) {
+    throw new Error(`No se pudo consultar el agua: ${error.message}`);
+  }
+
+  const logs = data ?? [];
+  const consumedMl = logs.reduce(
+    (total: number, log: any) => total + Number(log.amount_ml ?? 0),
+    0,
+  );
+  const configuredTarget = Number(profile?.daily_water_target_ml);
+  const targetMl = Number.isFinite(configuredTarget) && configuredTarget > 0
+    ? configuredTarget
+    : 2000;
+
+  return {
+    date: bounds.localDate,
+    timezone: timeZone,
+    consumed_ml: consumedMl,
+    target_ml: targetMl,
+    remaining_ml: Math.max(targetMl - consumedMl, 0),
+    progress_pct: Math.round((consumedMl / targetMl) * 100),
+    logs,
+  };
+}
+
+function resolveTimeZone(value: unknown): string {
+  const candidate = typeof value === "string" && value.trim()
+    ? value.trim()
+    : "Europe/Madrid";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: candidate }).format(new Date());
+    return candidate;
+  } catch {
+    return "Europe/Madrid";
+  }
+}
+
+function getTodayBounds(timeZone: string, now = new Date()) {
+  const current = zonedDateParts(now, timeZone);
+  const nextDay = new Date(Date.UTC(current.year, current.month - 1, current.day + 1));
+  const next = {
+    year: nextDay.getUTCFullYear(),
+    month: nextDay.getUTCMonth() + 1,
+    day: nextDay.getUTCDate(),
+  };
+  return {
+    start: zonedMidnightToUtc(current.year, current.month, current.day, timeZone),
+    end: zonedMidnightToUtc(next.year, next.month, next.day, timeZone),
+    localDate: `${current.year}-${String(current.month).padStart(2, "0")}-${String(current.day).padStart(2, "0")}`,
+  };
+}
+
+function zonedMidnightToUtc(
+  year: number,
+  month: number,
+  day: number,
+  timeZone: string,
+): Date {
+  const utcGuess = Date.UTC(year, month - 1, day);
+  const firstOffset = timeZoneOffsetMs(new Date(utcGuess), timeZone);
+  let result = new Date(utcGuess - firstOffset);
+  const correctedOffset = timeZoneOffsetMs(result, timeZone);
+  if (correctedOffset !== firstOffset) {
+    result = new Date(utcGuess - correctedOffset);
+  }
+  return result;
+}
+
+function timeZoneOffsetMs(date: Date, timeZone: string): number {
+  const parts = zonedDateParts(date, timeZone);
+  const representedAsUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  );
+  const roundedInput = Math.floor(date.getTime() / 1000) * 1000;
+  return representedAsUtc - roundedInput;
+}
+
+function zonedDateParts(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, Number(part.value)]),
+  );
+  return {
+    year: values.year,
+    month: values.month,
+    day: values.day,
+    hour: values.hour,
+    minute: values.minute,
+    second: values.second,
+  };
 }

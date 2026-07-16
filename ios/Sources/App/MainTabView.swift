@@ -34,5 +34,18 @@ struct MainTabView: View {
                 .tabItem { Label("Ajustes", systemImage: "gearshape.fill") }
                 .tag(Tab.settings)
         }
+        .onAppear { selectPendingRoute(appState.pendingRoute) }
+        .onChange(of: appState.pendingRoute) { _, route in
+            selectPendingRoute(route)
+        }
+    }
+
+    private func selectPendingRoute(_ route: AppState.Route?) {
+        switch route {
+        case .some(.macros), .some(.newMeal):
+            selectedTab = .macros
+        case .none:
+            break
+        }
     }
 }

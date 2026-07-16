@@ -20,31 +20,33 @@ Codemagic es un CI/CD especializado en iOS/Android con **runners macOS dedicados
 
 Ve a tu app → **Environment variables** → crea los grupos y variables:
 
-### Group: `bundle_identifiers` (públicas, no son secretas)
+### Group: `Supabase`
 
 | Variable | Value | Secret |
 |---|---|---|
-| `APPLE_BUNDLE_ID` | `com.joelmortees.nutricoach` | ❌ No |
-
-### Group: `app_store_connect` (secretas, sensibles)
-
-| Variable | Value | Secret |
-|---|---|---|
-| `APP_STORE_CONNECT_TEAM_ID` | `9HXVF6WC32` | ✅ Sí |
-| `APPLE_KEY_ID` | `NW4KQY9NF2` | ✅ Sí |
-| `APPLE_ISSUER_ID` | `d9cdd5e6-6af6-4494-8934-b1689e73f524` | ✅ Sí |
-| `APPLE_API_KEY_BASE64` | (el base64 largo de tu `.env`) | ✅ Sí |
+| `SUPABASE_URL` | URL del proyecto | ❌ No |
+| `SUPABASE_ANON_KEY` | Clave pública `anon` | ✅ Sí |
 
 ## Paso 4 — Configurar Code Signing
 
 1. En tu app de Codemagic, ve a **Code signing identities**
-2. Click **Apple Developer Portal** → conectar
-3. Pega:
-   - **Team ID**: `9HXVF6WC32`
-   - **Key ID**: `NW4KQY9NF2`
-   - **Issuer ID**: `d9cdd5e6-6af6-4494-8934-b1689e73f524`
-   - **API Key (.p8)**: sube el archivo `AuthKey_NW4KQY9NF2.p8` desde tu PC
-4. Codemagic se conecta a Apple y descarga tus certificados
+2. Conecta **Apple Developer Portal** con una App Store Connect API key.
+3. En **iOS certificates**, genera o sube un certificado **Apple Development** que incluya su clave privada.
+4. En **iOS provisioning profiles**, sube los perfiles de la app y de la extensión descritos abajo.
+
+La API key `.p8` permite consultar el portal, pero no sustituye al certificado de firma con clave privada.
+
+### Capacidades y perfil del widget
+
+El widget necesita una extensión firmada aparte y dos capacidades compartidas:
+
+1. En Apple Developer crea el App Group `group.com.joelmortees.nutricoach`.
+2. En el App ID `com.joelmortees.nutricoach`, activa **App Groups**, **Keychain Sharing**, **HealthKit**, **Sign in with Apple** y **Push Notifications**.
+3. Crea el App ID explícito `com.joelmortees.nutricoach.widgets` y activa solo **App Groups** y **Keychain Sharing** con los mismos identificadores compartidos.
+4. Regenera el provisioning profile de la app y crea otro para la extensión.
+5. Sube ambos perfiles a **Code signing identities > iOS provisioning profiles** en Codemagic.
+
+Codemagic obtiene el perfil principal y los perfiles `com.joelmortees.nutricoach.*` al usar el bundle ID base. Si falta el perfil de la extensión, el código compilará sin firma pero el IPA firmado no se podrá generar.
 
 ⚠️ Si ya borraste el .p8, tendrás que:
 - Volver a https://appstoreconnect.apple.com/access/api
@@ -55,12 +57,12 @@ Ve a tu app → **Environment variables** → crea los grupos y variables:
 ## Paso 5 — Disparar el primer build
 
 1. Ve a tu app → click **Start new build**
-2. Selecciona workflow **`ios-debug`** (más rápido, solo compila sin firma)
+2. Selecciona workflow **`ios-debug`** (compilación Debug con firma de desarrollo)
 3. Click **Start build**
 4. Espera 3-5 minutos (vs 2+ horas de GitHub Actions)
 
 Cuando termine:
-- Click en el artifact **`NutriCoach-Debug-unsigned.ipa`**
+- Click en el artifact **`NutriCoach-Debug.ipa`**
 - Descárgalo a tu PC
 - Instálalo con sideloadly/AltStore
 
@@ -68,23 +70,25 @@ Cuando termine:
 
 | Workflow | Cuándo se ejecuta | Qué hace | Output |
 |---|---|---|---|
-| `ios-debug` | Push/PR a main o feat/* | Compila sin firmar (valida que el código está OK) | `NutriCoach-Debug-unsigned.ipa` |
+| `ios-debug` | Push a main, feat/* o test/* | Compila Debug, firma la app y verifica que la extensión esté embebida | `NutriCoach-Debug.ipa` |
 | `ios-signed` | Push a main o manual | Compila Y firma con tu Apple Developer | `NutriCoach-Release.ipa` (instalable con sideloadly) |
 
 Para uso diario, **`ios-signed`** es el que necesitas.
 
 ## Renovar la app cada 7 días
 
-Como la app está firmada con tu Apple ID personal, caduca a los 7 días. Opciones:
+Un perfil Development del Apple Developer Program mantiene la validez indicada por el propio perfil. El plazo de 7 días solo aplica si Sideloadly o AltStore vuelve a firmar el IPA con un Apple ID gratuito; esa re-firma también puede limitar capabilities como App Groups, HealthKit o Keychain Sharing.
+
+Opciones para una re-firma gratuita:
 
 1. **AltStore** (gratis, recomendado) → re-firma automático
 2. **Reinstalar manualmente** cada semana con sideloadly
-3. **Workflow manual** → disparas `ios-signed` cada semana y re-instalas
+3. **Workflow manual** → generas de nuevo el IPA y dejas que Sideloadly lo vuelva a firmar
 
 ## Troubleshooting
 
 Si un build falla:
 - Click en el build fallido
-- Revisa los logs (especialmente `Build (Debug, no signing)`)
+- Revisa los logs (especialmente `Build (Debug, signed)`)
 - Si es error de compilación Swift, me lo pasas y lo arreglo
-- Si es error de code signing, revisa que el .p8 esté bien subido en Code signing identities
+- Si es error de code signing, revisa el certificado con clave privada y los dos provisioning profiles en Code signing identities

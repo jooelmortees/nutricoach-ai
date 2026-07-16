@@ -18,6 +18,7 @@ struct Profile: Codable, Identifiable {
     var dailyProteinG: Int?
     var dailyCarbsG: Int?
     var dailyFatG: Int?
+    var dailyWaterTargetMl: Int?
     var dietaryStyle: [String]?
     var allergens: [String]?
     var restrictions: [String]?
@@ -44,6 +45,7 @@ struct Profile: Codable, Identifiable {
         case dailyProteinG = "daily_protein_g"
         case dailyCarbsG = "daily_carbs_g"
         case dailyFatG = "daily_fat_g"
+        case dailyWaterTargetMl = "daily_water_target_ml"
         case dietaryStyle = "dietary_style"
         case allergens
         case restrictions
@@ -55,6 +57,37 @@ struct Profile: Codable, Identifiable {
         case locale
         case timezone
         case onboardedAt = "onboarded_at"
+    }
+}
+
+enum WaterLogSource: String, Codable {
+    case app
+    case widget
+    case agent
+    case healthkit
+}
+
+struct WaterLog: Codable, Identifiable {
+    let id: UUID
+    let userId: UUID
+    let amountMl: Int
+    let loggedAt: String
+    let source: WaterLogSource
+    let clientEventId: String
+    let createdAt: String
+
+    var date: Date {
+        DateParsing.parse(loggedAt) ?? Date()
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId = "user_id"
+        case amountMl = "amount_ml"
+        case loggedAt = "logged_at"
+        case source
+        case clientEventId = "client_event_id"
+        case createdAt = "created_at"
     }
 }
 

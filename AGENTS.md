@@ -9,7 +9,7 @@ Reglas específicas de este proyecto. Complementa (no sustituye) el AGENTS.md gl
 - **Plataforma de build**: macOS-only (Xcode 26 en Mac mini M2 de Codemagic).
 - **NO se puede compilar iOS en Windows**. Xcode no existe para Windows. Swift for Windows solo compila binarios Windows, no iOS. No prometas al usuario que puede compilar iOS localmente.
 - **Si un build falla con `failed to produce diagnostic` del compilador de Swift**, NO revertir a regresiones. El error oculta otro. Investigar con `context7` y `gh_grep`, leer TODO el código relacionado (viewmodel, sub-vistas, modelos), pedir log completo al usuario si el grep no basta. Fix debe mantener TODA la funcionalidad.
-- **Entitlements (HealthKit, Apple Sign In)**: el build se hace con `CODE_SIGNING_ALLOWED=NO` y por tanto `xcodebuild` NO inyecta los entitlements en el binario. iOS los rechaza en runtime con "Missing entitlement". Solución: paso post-build `Re-sign with entitlements` en `codemagic.yaml` que ejecuta `codesign --force --sign - --entitlements ...` (firma ad-hoc). **CRÍTICO para HealthKit**: además, en `developer.apple.com` el App ID `com.joelmortees.nutricoach` debe tener la capability **HealthKit** habilitada, y el cert que use Sideloadly/AltStore debe estar vinculado a un provisioning profile de ese App ID. Sin eso, iOS rechaza el entitlement incluso con codesign ad-hoc.
+- **Entitlements y widgets**: Codemagic firma durante `xcodebuild` mediante `ios_signing` y perfiles separados para `com.joelmortees.nutricoach` y `com.joelmortees.nutricoach.widgets`. No modificar el `.app` después de firmarlo; verificar app y `.appex` con `codesign --verify --deep --strict`. GitHub Actions usa `CODE_SIGNING_ALLOWED=NO` únicamente para validar compilación y genera un IPA sin firma que no garantiza HealthKit, Apple Sign In, App Groups ni Keychain Sharing. En Apple Developer deben estar habilitadas las capabilities y regenerados ambos perfiles.
 
 ### Tabla `meals` (referencia rápida para inserts)
 
@@ -34,8 +34,8 @@ Reglas específicas de este proyecto. Complementa (no sustituye) el AGENTS.md gl
 
 - **`.env`**: NUNCA commitear. Permisos `icacls` owner-only (`DESKTOP-8C0IARF\Joel FullControl`).
 - **`.env.example`**: plantilla con placeholders, sí se commitea.
-- **Codemagic Environment Variables**: se inyectan al `.app/Info.plist` post-build con `PlistBuddy Add` (no `Set`). Grupo declarado en el workflow con `groups: [NombreGrupo]`.
-- **GitHub Secrets**: para CI alternativa si Codemagic falla.
+- **Codemagic Environment Variables**: se pasan como build settings a `xcodebuild` y XcodeGen las expande en ambos `Info.plist` antes de firmar. Grupo declarado en el workflow con `groups: [NombreGrupo]`.
+- **GitHub Secrets**: para la compilación alternativa sin firma y el despliegue de Edge Functions.
 
 ### Supabase
 
