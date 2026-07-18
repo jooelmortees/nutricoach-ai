@@ -15,7 +15,10 @@ final class SupabaseService {
             supabaseURL: Config.supabaseURL,
             supabaseKey: Config.supabaseAnonKey,
             options: SupabaseClientOptions(
-                auth: .init(storage: SharedAuthStorage())
+                auth: .init(
+                    storage: SharedAuthStorage(),
+                    storageKey: SharedConfiguration.authStorageKey
+                )
             )
         )
     }

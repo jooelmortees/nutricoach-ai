@@ -72,7 +72,7 @@ workflows:
           echo "=== Entitlements del binario firmado ==="
           APP_PATH_AFTER_BUILD=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
           if [ -n "$APP_PATH_AFTER_BUILD" ]; then
-            codesign -d --entitlements :- "$APP_PATH_AFTER_BUILD" 2>&1
+            codesign --display --entitlements - --xml "$APP_PATH_AFTER_BUILD" 2>/dev/null
             echo ""
             echo "=== Firma del binario ==="
             codesign -dvv "$APP_PATH_AFTER_BUILD" 2>&1 | head -15
@@ -84,7 +84,7 @@ workflows:
               echo ""
               echo "=== Firma de la extension WidgetKit ==="
               codesign -dvv "$WIDGET_PATH" 2>&1 | head -15
-              codesign -d --entitlements :- "$WIDGET_PATH" 2>&1
+              codesign --display --entitlements - --xml "$WIDGET_PATH" 2>/dev/null
               if ! codesign --verify --strict "$WIDGET_PATH"; then
                 EXIT=1
               fi
@@ -130,8 +130,23 @@ workflows:
           WIDGET_PATH="$APP_PATH/PlugIns/NutriCoachWidgets.appex"
           codesign --verify --deep --strict "$APP_PATH"
           codesign --verify --strict "$WIDGET_PATH"
-          codesign -d --entitlements :- "$APP_PATH" 2>&1 | head -30
-          codesign -d --entitlements :- "$WIDGET_PATH" 2>&1 | head -30
+          codesign --display --entitlements - --xml "$APP_PATH" > build/app-entitlements.plist 2>/dev/null
+          codesign --display --entitlements - --xml "$WIDGET_PATH" > build/widget-entitlements.plist 2>/dev/null
+
+          APP_GROUP=$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups:0" build/app-entitlements.plist)
+          WIDGET_GROUP=$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups:0" build/widget-entitlements.plist)
+          APPLE_SIGN_IN=$(/usr/libexec/PlistBuddy -c "Print :com.apple.developer.applesignin:0" build/app-entitlements.plist)
+
+          test "$APP_GROUP" = "group.com.joelmortees.nutricoach" || { echo "ERROR: falta App Groups en la app"; exit 1; }
+          test "$WIDGET_GROUP" = "group.com.joelmortees.nutricoach" || { echo "ERROR: falta App Groups en el widget"; exit 1; }
+          test "$APPLE_SIGN_IN" = "Default" || { echo "ERROR: falta Sign in with Apple en la app"; exit 1; }
+          grep -q "com.joelmortees.nutricoach.shared" build/app-entitlements.plist || { echo "ERROR: falta Keychain Sharing en la app"; exit 1; }
+          grep -q "com.joelmortees.nutricoach.shared" build/widget-entitlements.plist || { echo "ERROR: falta Keychain Sharing en el widget"; exit 1; }
+
+          echo "=== Entitlements validados de la app ==="
+          cat build/app-entitlements.plist
+          echo "=== Entitlements validados del widget ==="
+          cat build/widget-entitlements.plist
       - name: Create IPA
         script: |
           set -euo pipefail
@@ -167,6 +182,8 @@ workflows:
     artifacts:
       - build/NutriCoach-Debug.ipa
       - build/xcodebuild.log
+      - build/app-entitlements.plist
+      - build/widget-entitlements.plist
     publishing:
       email:
         recipients:
@@ -176,7 +193,7 @@ workflows:
           failure: true
 
   ios-signed:
-    name: iOS Signed (for sideloadly)
+    name: iOS Signed (for FlekStore)
     max_build_duration: 60
     environment:
       xcode: latest
@@ -228,6 +245,25 @@ workflows:
             SUPABASE_URL="$SUPABASE_URL" \
             SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
             build | tee build/xcodebuild-signed.log
+      - name: Verify signed entitlements
+        script: |
+          set -e
+          APP_PATH=$(find build/DerivedData -name "NutriCoach.app" -type d | head -1)
+          WIDGET_PATH="$APP_PATH/PlugIns/NutriCoachWidgets.appex"
+          codesign --verify --deep --strict "$APP_PATH"
+          codesign --verify --strict "$WIDGET_PATH"
+          codesign --display --entitlements - --xml "$APP_PATH" > build/app-entitlements.plist 2>/dev/null
+          codesign --display --entitlements - --xml "$WIDGET_PATH" > build/widget-entitlements.plist 2>/dev/null
+
+          APP_GROUP=$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups:0" build/app-entitlements.plist)
+          WIDGET_GROUP=$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups:0" build/widget-entitlements.plist)
+          APPLE_SIGN_IN=$(/usr/libexec/PlistBuddy -c "Print :com.apple.developer.applesignin:0" build/app-entitlements.plist)
+
+          test "$APP_GROUP" = "group.com.joelmortees.nutricoach" || { echo "ERROR: falta App Groups en la app"; exit 1; }
+          test "$WIDGET_GROUP" = "group.com.joelmortees.nutricoach" || { echo "ERROR: falta App Groups en el widget"; exit 1; }
+          test "$APPLE_SIGN_IN" = "Default" || { echo "ERROR: falta Sign in with Apple en la app"; exit 1; }
+          grep -q "com.joelmortees.nutricoach.shared" build/app-entitlements.plist || { echo "ERROR: falta Keychain Sharing en la app"; exit 1; }
+          grep -q "com.joelmortees.nutricoach.shared" build/widget-entitlements.plist || { echo "ERROR: falta Keychain Sharing en el widget"; exit 1; }
       - name: Create IPA
         script: |
           set -euo pipefail
@@ -243,8 +279,6 @@ workflows:
             find "$APP_PATH" -maxdepth 3 -print
             exit 1
           fi
-          codesign --verify --deep --strict "$APP_PATH"
-          codesign --verify --strict "$WIDGET_PATH"
           rm -rf build/Payload
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
@@ -253,6 +287,8 @@ workflows:
     artifacts:
       - build/NutriCoach-Release.ipa
       - build/xcodebuild-signed.log
+      - build/app-entitlements.plist
+      - build/widget-entitlements.plist
     publishing:
       email:
         recipients:

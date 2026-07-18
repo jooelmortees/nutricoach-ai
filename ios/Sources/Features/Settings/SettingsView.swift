@@ -435,7 +435,7 @@ struct SettingsView: View {
                 .eq("id", value: userId)
                 .execute()
             // Refrescar el perfil en AuthManager
-            await auth.refreshProfile()
+            try await auth.refreshProfile()
             do {
                 try await DailyTrackingService.shared.refreshWidgetSnapshot()
             } catch {
@@ -464,7 +464,7 @@ struct SettingsView: View {
                 .update(UpdatePayload(daily_water_target_ml: waterTargetMl))
                 .eq("id", value: userId)
                 .execute()
-            await auth.refreshProfile()
+            try await auth.refreshProfile()
             do {
                 try await DailyTrackingService.shared.refreshWidgetSnapshot()
             } catch {

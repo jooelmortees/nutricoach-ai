@@ -234,6 +234,12 @@ struct OnboardingView: View {
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            if let savingErrorMessage = viewModel.savingErrorMessage {
+                Text(savingErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
             Spacer()
             Button {
                 Task { await viewModel.finish(auth: auth) }
@@ -364,6 +370,7 @@ final class OnboardingViewModel: ObservableObject {
     @Published var isConnectingHealthKit: Bool = false
     @Published var isSaving: Bool = false
     @Published var errorMessage: String?
+    @Published var savingErrorMessage: String?
 
     init() {
         // Reflejar estado real al entrar al view model
@@ -433,8 +440,10 @@ final class OnboardingViewModel: ObservableObject {
     }
 
     func finish(auth: AuthManager) async {
+        savingErrorMessage = nil
         isSaving = true
         defer { isSaving = false }
+        var profileWasSaved = false
         do {
             // Calcular año de nacimiento
             var birthDate: String? = nil
@@ -488,10 +497,14 @@ final class OnboardingViewModel: ObservableObject {
                 .upsert(payload, onConflict: "id")
                 .execute()
 
-            // Recargar perfil en auth
-            await auth.restoreSession()
+            profileWasSaved = true
+            try await auth.refreshProfile()
         } catch {
-            errorMessage = "Error guardando perfil: \(error.localizedDescription)"
+            if profileWasSaved {
+                savingErrorMessage = "El perfil se guardó, pero no se pudo recargar: \(error.localizedDescription)"
+            } else {
+                savingErrorMessage = "Error guardando perfil: \(error.localizedDescription)"
+            }
         }
     }
 }

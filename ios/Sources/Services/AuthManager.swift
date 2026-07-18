@@ -24,22 +24,29 @@ final class AuthManager: ObservableObject {
 
     func restoreSession() async {
         profile = nil
+        authError = nil
         do {
             let session = try await supabase.auth.session
             let user = session.user
-            await loadProfile(userId: user.id)
             state = .signedIn(user: user)
-            await refreshTrackingSnapshot(userId: user.id)
-            AppLogger.info("Sesión restaurada: \(user.id)")
-        } catch {
             do {
-                try await supabase.auth.signOut(scope: .local)
+                try await loadProfile(userId: user.id)
+                await refreshTrackingSnapshot(userId: user.id)
+                AppLogger.info("Sesión restaurada: \(user.id)")
             } catch {
-                AppLogger.warning("No se pudo limpiar la sesion local: \(error.localizedDescription)")
+                authError = error.localizedDescription
+                AppLogger.warning("Sesion valida, pero no se pudo cargar el perfil: \(error.localizedDescription)")
             }
-            DailyTrackingService.shared.clearWidgetSnapshot()
-            state = .signedOut
-            AppLogger.info("No se pudo restaurar una sesion valida")
+        } catch {
+            if let currentSession = supabase.auth.currentSession {
+                state = .signedIn(user: currentSession.user)
+                authError = error.localizedDescription
+                AppLogger.warning("No se pudo validar la sesion guardada: \(error.localizedDescription)")
+            } else {
+                DailyTrackingService.shared.clearWidgetSnapshot()
+                state = .signedOut
+                AppLogger.info("No hay una sesion guardada")
+            }
         }
     }
 
@@ -48,10 +55,7 @@ final class AuthManager: ObservableObject {
             email: email,
             password: password
         )
-        profile = nil
-        await loadProfile(userId: session.user.id)
-        state = .signedIn(user: session.user)
-        await refreshTrackingSnapshot(userId: session.user.id)
+        try await completeSignIn(session: session)
     }
 
     func signUp(email: String, password: String, fullName: String?) async throws {
@@ -64,10 +68,13 @@ final class AuthManager: ObservableObject {
             password: password,
             data: userData
         )
-        profile = nil
-        await loadProfile(userId: response.user.id)
-        state = .signedIn(user: response.user)
-        await refreshTrackingSnapshot(userId: response.user.id)
+        guard let session = response.session else {
+            throw AuthManagerError.emailConfirmationRequired
+        }
+        guard session.user.id == response.user.id else {
+            throw AuthManagerError.sessionUserMismatch
+        }
+        try await completeSignIn(session: session)
     }
 
     /// Sign In with Apple: extrae el identityToken de la credencial de Apple
@@ -99,16 +106,36 @@ final class AuthManager: ObservableObject {
                 )
             }
         }
-        profile = nil
-        await loadProfile(userId: session.user.id)
-        state = .signedIn(user: session.user)
-        await refreshTrackingSnapshot(userId: session.user.id)
+        try await completeSignIn(session: session)
     }
 
     func signOut() async {
-        try? await supabase.auth.signOut()
+        var signOutError: Error?
+        do {
+            try await supabase.auth.signOut()
+        } catch {
+            signOutError = error
+            AppLogger.warning("No se pudo completar el cierre de sesion remoto: \(error.localizedDescription)")
+        }
+
+        let sharedSessionCleared: Bool
+        do {
+            sharedSessionCleared = try SharedAuthStorage().isSharedSessionCleared(
+                key: SharedConfiguration.authStorageKey
+            )
+        } catch {
+            authError = "No se pudo verificar el cierre de sesión del widget: \(error.localizedDescription)"
+            return
+        }
+
+        if supabase.auth.currentSession != nil || !sharedSessionCleared {
+            authError = signOutError?.localizedDescription ?? "No se pudo eliminar la sesión guardada."
+            return
+        }
+
         DailyTrackingService.shared.clearWidgetSnapshot()
         profile = nil
+        authError = nil
         state = .signedOut
     }
 
@@ -167,57 +194,39 @@ final class AuthManager: ObservableObject {
         return rows.map { $0.id.uuidString }
     }
 
-    private func loadProfile(userId: UUID) async {
+    private func completeSignIn(session: Session) async throws {
+        profile = nil
+        authError = nil
+        state = .signedIn(user: session.user)
         do {
-            let response: Profile = try await SupabaseService.shared.client
-                .from("profiles")
-                .select()
-                .eq("id", value: userId.uuidString)
-                .single()
-                .execute()
-                .value
-            self.profile = response
+            try await loadProfile(userId: session.user.id)
         } catch {
-            // La fila no existe en profiles (trigger fallo o usuario creado
-            // antes de la migracion 0006). Crear fila vacia con upsert para
-            // que el onboarding pueda hacer update despues.
-            AppLogger.warning("Perfil no encontrado, creando fila vacia: \(error.localizedDescription)")
-            await createEmptyProfile(userId: userId)
+            authError = error.localizedDescription
+            throw error
         }
+        await refreshTrackingSnapshot(userId: session.user.id)
     }
 
-    private func createEmptyProfile(userId: UUID) async {
-        struct EmptyProfile: Encodable {
-            let id: String
-            let full_name: String?
+    private func loadProfile(userId: UUID) async throws {
+        let authenticatedUserId = try await supabase.auth.session.user.id
+        guard authenticatedUserId == userId else {
+            throw AuthManagerError.sessionUserMismatch
         }
-        let payload = EmptyProfile(
-            id: userId.uuidString,
-            full_name: nil
-        )
-        do {
-            try await SupabaseService.shared.client
-                .from("profiles")
-                .upsert(payload, onConflict: "id")
-                .execute()
-            // Recargar para que profile no sea nil
-            let response: Profile = try await SupabaseService.shared.client
-                .from("profiles")
-                .select()
-                .eq("id", value: userId.uuidString)
-                .single()
-                .execute()
-                .value
-            self.profile = response
-        } catch {
-            AppLogger.error("No se pudo crear perfil vacio: \(error.localizedDescription)")
-        }
+
+        let profiles: [Profile] = try await supabase
+            .from("profiles")
+            .select()
+            .eq("id", value: userId.uuidString)
+            .limit(1)
+            .execute()
+            .value
+        profile = profiles.first
     }
 
     /// Recarga el perfil desde Supabase. Usar tras actualizar campos del perfil.
-    func refreshProfile() async {
-        guard let userId = profile?.id else { return }
-        await loadProfile(userId: userId)
+    func refreshProfile() async throws {
+        let userId = try await supabase.auth.session.user.id
+        try await loadProfile(userId: userId)
     }
 
     private func refreshTrackingSnapshot(userId: UUID) async {
@@ -236,6 +245,20 @@ enum AuthError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .deleteFailed(let msg): return "No se pudo eliminar la cuenta: \(msg)"
+        }
+    }
+}
+
+private enum AuthManagerError: LocalizedError {
+    case emailConfirmationRequired
+    case sessionUserMismatch
+
+    var errorDescription: String? {
+        switch self {
+        case .emailConfirmationRequired:
+            return "Revisa tu correo y confirma la cuenta antes de iniciar sesión."
+        case .sessionUserMismatch:
+            return "La sesion guardada no corresponde al usuario autenticado."
         }
     }
 }

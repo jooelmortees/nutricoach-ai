@@ -41,8 +41,8 @@ La API key `.p8` permite consultar el portal, pero no sustituye al certificado d
 El widget necesita una extensión firmada aparte y dos capacidades compartidas:
 
 1. En Apple Developer crea el App Group `group.com.joelmortees.nutricoach`.
-2. En el App ID `com.joelmortees.nutricoach`, activa **App Groups**, **Keychain Sharing**, **HealthKit**, **Sign in with Apple** y **Push Notifications**.
-3. Crea el App ID explícito `com.joelmortees.nutricoach.widgets` y activa solo **App Groups** y **Keychain Sharing** con los mismos identificadores compartidos.
+2. En el App ID `com.joelmortees.nutricoach`, activa **App Groups**, **HealthKit**, **Sign in with Apple** y **Push Notifications**. Keychain Sharing se declara en los entitlements del target, no como un identificador descargable del portal.
+3. Crea el App ID explícito `com.joelmortees.nutricoach.widgets` y asígnale el mismo **App Group**.
 4. Regenera el provisioning profile de la app y crea otro para la extensión.
 5. Sube ambos perfiles a **Code signing identities > iOS provisioning profiles** en Codemagic.
 
@@ -64,16 +64,18 @@ Codemagic obtiene el perfil principal y los perfiles `com.joelmortees.nutricoach
 Cuando termine:
 - Click en el artifact **`NutriCoach-Debug.ipa`**
 - Descárgalo a tu PC
-- Instálalo con sideloadly/AltStore
+- Instálalo con FleckStore usando el certificado propio de NutriCoach
 
 ## Workflows definidos
 
 | Workflow | Cuándo se ejecuta | Qué hace | Output |
 |---|---|---|---|
 | `ios-debug` | Push a main, feat/* o test/* | Compila Debug, firma la app y verifica que la extensión esté embebida | `NutriCoach-Debug.ipa` |
-| `ios-signed` | Push a main o manual | Compila Y firma con tu Apple Developer | `NutriCoach-Release.ipa` (instalable con sideloadly) |
+| `ios-signed` | Push a main o manual | Compila y firma con tu Apple Developer | `NutriCoach-Release.ipa` (para instalar mediante FleckStore) |
 
 Para uso diario, **`ios-signed`** es el que necesitas.
+
+La instalación en el iPhone de desarrollo se hace mediante **FleckStore con el certificado propio de NutriCoach**. FleckStore debe conservar la firma separada de la app y `NutriCoachWidgets.appex`, además de los entitlements de Sign in with Apple, App Groups y Keychain Sharing. Si vuelve a firmar el IPA sin ellos, Apple Sign In y la comunicación con el widget fallarán aunque el build de Codemagic sea correcto.
 
 ## Renovar la app cada 7 días
 

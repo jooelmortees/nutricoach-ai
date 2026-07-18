@@ -56,16 +56,56 @@ struct RootView: View {
             case .signedOut:
                 AuthView()
             case .signedIn:
-                // Si no hay perfil o no ha completado onboarding, mostrar onboarding.
-                // profile nil significa que la fila no existe en BD (trigger fallo o
-                // usuario creado antes de la migracion 0006).
-                if auth.profile == nil || auth.profile?.onboardedAt == nil {
+                if let authError = auth.authError {
+                    SessionRecoveryView(message: authError)
+                } else if auth.profile == nil || auth.profile?.onboardedAt == nil {
                     OnboardingView()
                 } else {
                     MainTabView()
                 }
             }
         }
+    }
+}
+
+private struct SessionRecoveryView: View {
+    @EnvironmentObject private var auth: AuthManager
+    let message: String
+    @State private var isRetrying = false
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 56))
+                .foregroundStyle(.orange)
+            Text("No se pudo cargar tu cuenta")
+                .font(.title2.bold())
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button {
+                Task {
+                    isRetrying = true
+                    await auth.restoreSession()
+                    isRetrying = false
+                }
+            } label: {
+                if isRetrying {
+                    ProgressView()
+                } else {
+                    Label("Reintentar", systemImage: "arrow.clockwise")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isRetrying)
+
+            Button("Cerrar sesión", role: .destructive) {
+                Task { await auth.signOut() }
+            }
+            .disabled(isRetrying)
+        }
+        .padding(32)
     }
 }
 
