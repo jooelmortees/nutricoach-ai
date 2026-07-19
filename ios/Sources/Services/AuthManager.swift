@@ -1,12 +1,11 @@
 // ============================================================
 // AuthManager - gestiona sesión de Supabase Auth
-// Soporta email/password, sign-up y Sign In with Apple
+// Soporta email/password, sign-up y OAuth con Google
 // ============================================================
 
 import Foundation
 import SwiftUI
 import Supabase
-import AuthenticationServices
 
 enum AuthState {
     case loading
@@ -25,16 +24,18 @@ final class AuthManager: ObservableObject {
     func restoreSession() async {
         profile = nil
         authError = nil
+        state = .loading
         do {
             let session = try await supabase.auth.session
             let user = session.user
-            state = .signedIn(user: user)
             do {
                 try await loadProfile(userId: user.id)
+                state = .signedIn(user: user)
                 await refreshTrackingSnapshot(userId: user.id)
                 AppLogger.info("Sesión restaurada: \(user.id)")
             } catch {
                 authError = error.localizedDescription
+                state = .signedIn(user: user)
                 AppLogger.warning("Sesion valida, pero no se pudo cargar el perfil: \(error.localizedDescription)")
             }
         } catch {
@@ -77,35 +78,13 @@ final class AuthManager: ObservableObject {
         try await completeSignIn(session: session)
     }
 
-    /// Sign In with Apple: extrae el identityToken de la credencial de Apple
-    /// y lo envía a Supabase via `signInWithIdToken`. Si es la primera vez
-    /// y tenemos el nombre completo, lo guardamos en user_metadata.
-    func signInWithApple(idToken: String, fullName: PersonNameComponents?) async throws {
-        AppLogger.info("Apple Sign In: idToken length=\(idToken.count)")
-        let session: Session
-        do {
-            session = try await supabase.auth.signInWithIdToken(
-                credentials: OpenIDConnectCredentials(
-                    provider: .apple,
-                    idToken: idToken
-                )
-            )
-        } catch {
-            AppLogger.error("Apple Sign In failed: \(error.localizedDescription)")
-            throw error
-        }
-        AppLogger.info("Apple Sign In OK: user=\(session.user.id)")
-        // Solo la PRIMERA vez Apple envía el nombre completo. Las siguientes
-        // veces es nil. Si llega, lo guardamos en user_metadata.
-        if let components = fullName {
-            let formatter = PersonNameComponentsFormatter()
-            let fullNameString = formatter.string(from: components).trimmingCharacters(in: .whitespaces)
-            if !fullNameString.isEmpty {
-                _ = try? await supabase.auth.update(
-                    user: UserAttributes(data: ["full_name": .string(fullNameString)])
-                )
-            }
-        }
+    func signInWithGoogle() async throws {
+        let session = try await supabase.auth.signInWithOAuth(
+            provider: .google,
+            redirectTo: Config.oauthRedirectURL,
+            scopes: "openid email profile",
+            queryParams: [(name: "prompt", value: "select_account")]
+        )
         try await completeSignIn(session: session)
     }
 
@@ -197,13 +176,15 @@ final class AuthManager: ObservableObject {
     private func completeSignIn(session: Session) async throws {
         profile = nil
         authError = nil
-        state = .signedIn(user: session.user)
+        state = .loading
         do {
             try await loadProfile(userId: session.user.id)
         } catch {
             authError = error.localizedDescription
+            state = .signedIn(user: session.user)
             throw error
         }
+        state = .signedIn(user: session.user)
         await refreshTrackingSnapshot(userId: session.user.id)
     }
 

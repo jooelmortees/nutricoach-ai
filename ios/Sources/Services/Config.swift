@@ -5,6 +5,8 @@
 import Foundation
 
 enum Config {
+    static let oauthRedirectURL = URL(string: "nutricoach://login-callback/")!
+
     /// URL del proyecto Supabase. Se inyecta en build time desde Info.plist
     /// o desde variable de entorno. En debug se lee de Info.plist.
     static let supabaseURL: URL = {

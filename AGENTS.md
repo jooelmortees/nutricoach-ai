@@ -9,8 +9,8 @@ Reglas específicas de este proyecto. Complementa (no sustituye) el AGENTS.md gl
 - **Plataforma de build**: macOS-only (Xcode 26 en Mac mini M2 de Codemagic).
 - **NO se puede compilar iOS en Windows**. Xcode no existe para Windows. Swift for Windows solo compila binarios Windows, no iOS. No prometas al usuario que puede compilar iOS localmente.
 - **Si un build falla con `failed to produce diagnostic` del compilador de Swift**, NO revertir a regresiones. El error oculta otro. Investigar con `context7` y `gh_grep`, leer TODO el código relacionado (viewmodel, sub-vistas, modelos), pedir log completo al usuario si el grep no basta. Fix debe mantener TODA la funcionalidad.
-- **Entitlements y widgets**: Codemagic firma durante `xcodebuild` mediante `ios_signing` y perfiles separados para `com.joelmortees.nutricoach` y `com.joelmortees.nutricoach.widgets`. No modificar el `.app` después de firmarlo; verificar app y `.appex` con `codesign --verify --deep --strict`. GitHub Actions usa `CODE_SIGNING_ALLOWED=NO` únicamente para validar compilación y genera un IPA sin firma que no garantiza HealthKit, Apple Sign In, App Groups ni Keychain Sharing. En Apple Developer deben estar habilitadas las capabilities y regenerados ambos perfiles.
-- **Instalación en dispositivo**: Joel instala y actualiza siempre mediante FleckStore usando el certificado propio de NutriCoach. Al diagnosticar firma, asumir que FleckStore puede volver a firmar el IPA y comprobar que preserve los entitlements de la app y `NutriCoachWidgets.appex`, especialmente Sign in with Apple, App Groups y Keychain Sharing.
+- **Entitlements y widgets**: Codemagic firma durante `xcodebuild` mediante `ios_signing` y perfiles separados para `com.joelmortees.nutricoach` y `com.joelmortees.nutricoach.widgets`. No modificar el `.app` después de firmarlo; verificar app y `.appex` con `codesign --verify --deep --strict`. GitHub Actions usa `CODE_SIGNING_ALLOWED=NO` únicamente para validar compilación y genera un IPA sin firma que no garantiza HealthKit, App Groups ni Keychain Sharing. En Apple Developer deben estar habilitadas las capabilities y regenerados ambos perfiles.
+- **Instalación en dispositivo**: Joel instala y actualiza siempre mediante FleckStore usando el certificado propio de NutriCoach. Al diagnosticar firma, asumir que FleckStore puede volver a firmar el IPA y comprobar que preserve los entitlements de la app y `NutriCoachWidgets.appex`, especialmente App Groups y Keychain Sharing.
 
 ### Tabla `meals` (referencia rápida para inserts)
 
@@ -67,5 +67,5 @@ Reglas específicas de este proyecto. Complementa (no sustituye) el AGENTS.md gl
 
 - **Fase 1 (MVP)**: Auth + Chat + Macros + Camera placeholder. Hecho.
 - **Fase 2**: pendiente por decisión del usuario.
-- **Apple Sign In**: capability añadida, implementado pero no testeado en device.
+- **Google OAuth**: sustituye a Apple Sign In y usa PKCE con `nutricoach://login-callback/` a través de Supabase Auth.
 - **Persistencia de sesión**: activada por defecto en SDK Supabase Swift.

@@ -1,5 +1,5 @@
 // ============================================================
-// AuthView - Login / Sign up con email o Apple ID
+// AuthView - Login / Sign up con email o Google
 // ============================================================
 
 import SwiftUI
@@ -21,7 +21,7 @@ struct AuthView: View {
                     header
                     form
                     actions
-                    appleSignInButton
+                    googleSignInButton
                     if let err = errorMessage {
                         Text(err)
                             .font(.caption)
@@ -104,7 +104,7 @@ struct AuthView: View {
         }
     }
 
-    private var appleSignInButton: some View {
+    private var googleSignInButton: some View {
         VStack(spacing: 12) {
             HStack {
                 Rectangle()
@@ -119,13 +119,25 @@ struct AuthView: View {
             }
             .padding(.vertical, 4)
 
-            SignInWithAppleButton(.signIn) { request in
-                request.requestedScopes = [.email, .fullName]
-            } onCompletion: { result in
-                Task { await handleAppleSignIn(result) }
+            Button {
+                Task { await signInWithGoogle() }
+            } label: {
+                HStack(spacing: 10) {
+                    Text("G")
+                        .font(.headline.bold())
+                    Text("Continuar con Google")
+                        .font(.headline)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .foregroundStyle(.primary)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.secondary.opacity(0.25))
+                }
             }
-            .signInWithAppleButtonStyle(.black)
-            .frame(height: 50)
+            .buttonStyle(.plain)
             .disabled(isLoading)
         }
     }
@@ -145,31 +157,16 @@ struct AuthView: View {
         }
     }
 
-    private func handleAppleSignIn(_ result: Result<ASAuthorization, Error>) async {
+    private func signInWithGoogle() async {
         errorMessage = nil
         isLoading = true
         defer { isLoading = false }
-        switch result {
-        case .success(let authorization):
-            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
-                errorMessage = "Credencial de Apple no válida"
-                return
-            }
-            guard let identityTokenData = credential.identityToken,
-                  let identityToken = String(data: identityTokenData, encoding: .utf8) else {
-                errorMessage = "No se pudo obtener el token de identidad de Apple"
-                return
-            }
-            do {
-                try await auth.signInWithApple(idToken: identityToken, fullName: credential.fullName)
-            } catch {
-                errorMessage = "Error con Apple Sign In: \(error.localizedDescription)"
-            }
-        case .failure(let error):
-            // Si el usuario cancela, no mostramos error
-            if (error as NSError).code != ASAuthorizationError.canceled.rawValue {
-                errorMessage = "Error con Apple Sign In: \(error.localizedDescription)"
-            }
+        do {
+            try await auth.signInWithGoogle()
+        } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
+            return
+        } catch {
+            errorMessage = "Error iniciando sesión con Google: \(error.localizedDescription)"
         }
     }
 }

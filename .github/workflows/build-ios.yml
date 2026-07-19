@@ -70,6 +70,9 @@ jobs:
             echo "ERROR: faltan SUPABASE_URL o SUPABASE_ANON_KEY en GitHub Secrets"
             exit 1
           fi
+          curl -fsS "$SUPABASE_URL/auth/v1/settings" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            | ruby -rjson -e 'settings = JSON.parse(STDIN.read); abort("ERROR: Google OAuth no esta activado en Supabase") unless settings.dig("external", "google") == true'
 
       - name: Resolve SPM dependencies
         run: |

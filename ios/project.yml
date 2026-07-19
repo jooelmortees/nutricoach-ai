@@ -97,8 +97,6 @@ targets:
       path: Sources/Resources/NutriCoach.entitlements
       properties:
         com.apple.developer.healthkit: true
-        com.apple.developer.applesignin:
-          - Default
         aps-environment: development
         com.apple.security.application-groups:
           - group.com.joelmortees.nutricoach

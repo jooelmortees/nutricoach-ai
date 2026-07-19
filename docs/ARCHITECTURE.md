@@ -3,7 +3,7 @@
 ## Resumen en una imagen
 
 ```
-iPhone (sideloadly + AltStore)
+iPhone (FleckStore con certificado propio)
 └─ NutriCoach (Swift 5.9, SwiftUI, HealthKit, AVFoundation)
    ├─ supabase-swift (Auth, DB, Storage, Realtime)
    └─ HTTPS a Edge Functions
@@ -13,7 +13,7 @@ iPhone (sideloadly + AltStore)
 
 Supabase (managed)
 ├─ Postgres 15 + pgvector (memoria semántica)
-├─ Auth (email + Apple ID, JWT)
+├─ Auth (email + Google OAuth con PKCE, JWT)
 ├─ Storage (fotos/vídeos privados con RLS)
 ├─ Realtime v2 (WebSocket para chat streaming)
 └─ Edge Functions (Deno)
@@ -129,12 +129,12 @@ Todas las tablas tienen RLS: cada usuario solo ve/edita sus datos.
 - Joel no tiene Mac
 - GitHub Actions valida la compilación y empaqueta un IPA sin firma
 - Codemagic compila y firma la app y la extensión con sus perfiles de desarrollo
-- Para conservar HealthKit, Apple Sign In, App Groups y Keychain Sharing se usa el IPA firmado de Codemagic
+- Para conservar HealthKit, App Groups y Keychain Sharing se usa el IPA firmado de Codemagic
 
 ## Por qué NO publicamos en App Store
 
 - Es para uso personal de Joel
-- Sideloadly permite saltarse el review de Apple
+- La distribución privada mediante FleckStore evita el proceso de publicación en App Store
 - Mantiene total libertad técnica
 - Si en el futuro quiere publicar, ajustamos entitlements y submitimos
 

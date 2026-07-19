@@ -8,18 +8,19 @@
 - Cuenta de Apple Developer Program activa (tienes)
 - iPhone registrado en los provisioning profiles de la app y del widget
 - Certificado Apple Development y ambos perfiles configurados en Codemagic
-- Una herramienta de instalación que conserve la firma del IPA, como `ideviceinstaller`
+- FleckStore configurado con el certificado propio de NutriCoach
 - App **"Health Sync by appyhapps"** (gratis) si quieres datos de tu Huawei Watch GT6 Pro
 
 ## Paso 1: Instalar la app
 
 1. Ejecuta el workflow **`ios-signed`** en Codemagic.
 2. Descarga `NutriCoach-Release.ipa`.
-3. Instala el IPA sin reemplazar su firma de desarrollo.
-4. La app se instala como "NutriCoach" y la extensión queda incluida.
-5. Ve a Ajustes > General > VPN y gestión de dispositivos y confía en el certificado si iOS lo solicita.
+3. Abre el IPA en FleckStore, pulsa **Reset Settings** y deja **Remove mobileprovision** desactivado.
+4. Firma e instala el IPA con el certificado propio de NutriCoach.
+5. La app se instala como "NutriCoach" y la extensión queda incluida.
+6. Ve a Ajustes > General > VPN y gestión de dispositivos y confía en el certificado si iOS lo solicita.
 
-El IPA de GitHub Actions sirve para validar compilación. Una re-firma genérica con Sideloadly o AltStore puede eliminar HealthKit, Apple Sign In, App Groups o Keychain Sharing, por lo que no es la ruta de instalación completa.
+El IPA de GitHub Actions sirve para validar compilación. La firma final de FleckStore debe conservar HealthKit, App Groups, Keychain Sharing y `NutriCoachWidgets.appex`.
 
 ## Paso 2: Crear cuenta
 
@@ -91,24 +92,7 @@ El IPA de GitHub Actions sirve para validar compilación. Una re-firma genérica
 
 ## Renovación del certificado
 
-Con Apple Developer Program, el perfil Development dura lo indicado en el propio perfil. Los **7 días** solo aplican cuando Sideloadly o AltStore vuelve a firmar con un Apple ID gratuito, y esa firma puede no conservar HealthKit, App Groups o Keychain Sharing.
-
-Tienes 3 opciones:
-
-### Opción A: AltStore (recomendado)
-- AltStore re-firma automáticamente la app cada 7 días mientras tu PC esté encendido
-- Descarga https://altstore.io
-- Configura con tu Apple ID
-- Olvídate: la app nunca caduca
-
-### Opción B: Reinstalar manualmente cada 7 días
-- Conecta iPhone + abre sideloadly
-- Click derecho sobre la app > "Reinstall"
-- 30 segundos y listo
-
-### Opción C: IPA firmado por Codemagic
-- Usa el certificado Apple Development y los perfiles de la app y del widget configurados en Codemagic
-- Conserva las capabilities siempre que el dispositivo esté incluido en el perfil
+FleckStore muestra la fecha de caducidad del certificado importado. Antes de renovarlo, genera de nuevo los perfiles de la app y del widget con el certificado vigente, súbelos a Codemagic y vuelve a importar el certificado correspondiente en FleckStore.
 
 ## Soporte
 

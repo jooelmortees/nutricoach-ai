@@ -41,7 +41,7 @@ La API key `.p8` permite consultar el portal, pero no sustituye al certificado d
 El widget necesita una extensión firmada aparte y dos capacidades compartidas:
 
 1. En Apple Developer crea el App Group `group.com.joelmortees.nutricoach`.
-2. En el App ID `com.joelmortees.nutricoach`, activa **App Groups**, **HealthKit**, **Sign in with Apple** y **Push Notifications**. Keychain Sharing se declara en los entitlements del target, no como un identificador descargable del portal.
+2. En el App ID `com.joelmortees.nutricoach`, activa **App Groups**, **HealthKit** y **Push Notifications**. Keychain Sharing se declara en los entitlements del target, no como un identificador descargable del portal.
 3. Crea el App ID explícito `com.joelmortees.nutricoach.widgets` y asígnale el mismo **App Group**.
 4. Regenera el provisioning profile de la app y crea otro para la extensión.
 5. Sube ambos perfiles a **Code signing identities > iOS provisioning profiles** en Codemagic.
@@ -75,17 +75,24 @@ Cuando termine:
 
 Para uso diario, **`ios-signed`** es el que necesitas.
 
-La instalación en el iPhone de desarrollo se hace mediante **FleckStore con el certificado propio de NutriCoach**. FleckStore debe conservar la firma separada de la app y `NutriCoachWidgets.appex`, además de los entitlements de Sign in with Apple, App Groups y Keychain Sharing. Si vuelve a firmar el IPA sin ellos, Apple Sign In y la comunicación con el widget fallarán aunque el build de Codemagic sea correcto.
+La instalación en el iPhone de desarrollo se hace mediante **FleckStore con el certificado propio de NutriCoach**. FleckStore debe conservar la firma separada de la app y `NutriCoachWidgets.appex`, además de los entitlements de App Groups y Keychain Sharing. Si vuelve a firmar el IPA sin ellos, la comunicación con el widget fallará aunque el build de Codemagic sea correcto.
 
-## Renovar la app cada 7 días
+## Google OAuth
 
-Un perfil Development del Apple Developer Program mantiene la validez indicada por el propio perfil. El plazo de 7 días solo aplica si Sideloadly o AltStore vuelve a firmar el IPA con un Apple ID gratuito; esa re-firma también puede limitar capabilities como App Groups, HealthKit o Keychain Sharing.
+1. En [Google Cloud](https://console.cloud.google.com/auth/overview), crea o selecciona el proyecto de NutriCoach.
+2. En **Branding**, configura el nombre y correo de soporte.
+3. En **Audience**, selecciona audiencia externa y, mientras esté en modo Testing, añade `joelmo2004@gmail.com` como usuario de prueba.
+4. En **Data Access**, añade los scopes `openid`, `userinfo.email` y `userinfo.profile`.
+5. En **Clients**, crea un cliente OAuth de tipo **Web application**.
+6. Añade como Authorized redirect URI `https://oqkctjzaojyevdxvavaj.supabase.co/auth/v1/callback` sin barra final.
+7. En [Supabase > Authentication > Providers > Google](https://supabase.com/dashboard/project/oqkctjzaojyevdxvavaj/auth/providers?provider=Google), activa el proveedor e introduce el Client ID y Client Secret.
+8. En [Supabase > Authentication > URL Configuration](https://supabase.com/dashboard/project/oqkctjzaojyevdxvavaj/auth/url-configuration), añade exactamente `nutricoach://login-callback/` a Redirect URLs.
 
-Opciones para una re-firma gratuita:
+La app usa PKCE mediante `ASWebAuthenticationSession`; no necesita incluir el Client Secret ni el SDK de Google en el binario.
 
-1. **AltStore** (gratis, recomendado) → re-firma automático
-2. **Reinstalar manualmente** cada semana con sideloadly
-3. **Workflow manual** → generas de nuevo el IPA y dejas que Sideloadly lo vuelva a firmar
+## Renovar el certificado
+
+FleckStore muestra la fecha de caducidad del certificado importado. Cuando cambie el certificado, regenera los dos provisioning profiles, actualízalos en Codemagic e importa el certificado vigente en FleckStore.
 
 ## Troubleshooting
 

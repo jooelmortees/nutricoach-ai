@@ -31,6 +31,11 @@ workflows:
       - name: Set up Ruby + CocoaPods
         script: |
           gem install --no-document cocoapods
+      - name: Validate Google OAuth
+        script: |
+          curl -fsS "$SUPABASE_URL/auth/v1/settings" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            | ruby -rjson -e 'settings = JSON.parse(STDIN.read); abort("ERROR: Google OAuth no esta activado en Supabase") unless settings.dig("external", "google") == true'
       - name: Install xcodegen
         script: brew install xcodegen
       - name: Generate Xcode project
@@ -135,11 +140,9 @@ workflows:
 
           APP_GROUP=$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups:0" build/app-entitlements.plist)
           WIDGET_GROUP=$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups:0" build/widget-entitlements.plist)
-          APPLE_SIGN_IN=$(/usr/libexec/PlistBuddy -c "Print :com.apple.developer.applesignin:0" build/app-entitlements.plist)
 
           test "$APP_GROUP" = "group.com.joelmortees.nutricoach" || { echo "ERROR: falta App Groups en la app"; exit 1; }
           test "$WIDGET_GROUP" = "group.com.joelmortees.nutricoach" || { echo "ERROR: falta App Groups en el widget"; exit 1; }
-          test "$APPLE_SIGN_IN" = "Default" || { echo "ERROR: falta Sign in with Apple en la app"; exit 1; }
           grep -q "com.joelmortees.nutricoach.shared" build/app-entitlements.plist || { echo "ERROR: falta Keychain Sharing en la app"; exit 1; }
           grep -q "com.joelmortees.nutricoach.shared" build/widget-entitlements.plist || { echo "ERROR: falta Keychain Sharing en el widget"; exit 1; }
 
@@ -213,6 +216,11 @@ workflows:
       - name: Set up Ruby + CocoaPods
         script: |
           gem install --no-document cocoapods
+      - name: Validate Google OAuth
+        script: |
+          curl -fsS "$SUPABASE_URL/auth/v1/settings" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            | ruby -rjson -e 'settings = JSON.parse(STDIN.read); abort("ERROR: Google OAuth no esta activado en Supabase") unless settings.dig("external", "google") == true'
       - name: Install xcodegen
         script: brew install xcodegen
       - name: Generate Xcode project
@@ -257,11 +265,9 @@ workflows:
 
           APP_GROUP=$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups:0" build/app-entitlements.plist)
           WIDGET_GROUP=$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups:0" build/widget-entitlements.plist)
-          APPLE_SIGN_IN=$(/usr/libexec/PlistBuddy -c "Print :com.apple.developer.applesignin:0" build/app-entitlements.plist)
 
           test "$APP_GROUP" = "group.com.joelmortees.nutricoach" || { echo "ERROR: falta App Groups en la app"; exit 1; }
           test "$WIDGET_GROUP" = "group.com.joelmortees.nutricoach" || { echo "ERROR: falta App Groups en el widget"; exit 1; }
-          test "$APPLE_SIGN_IN" = "Default" || { echo "ERROR: falta Sign in with Apple en la app"; exit 1; }
           grep -q "com.joelmortees.nutricoach.shared" build/app-entitlements.plist || { echo "ERROR: falta Keychain Sharing en la app"; exit 1; }
           grep -q "com.joelmortees.nutricoach.shared" build/widget-entitlements.plist || { echo "ERROR: falta Keychain Sharing en el widget"; exit 1; }
       - name: Create IPA

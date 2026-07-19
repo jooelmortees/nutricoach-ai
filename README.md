@@ -19,7 +19,7 @@ App iOS nativa con un agente IA dietista-nutricionista potenciado por **Gemini 3
 ## Arquitectura en 30 segundos
 
 ```
-iPhone (sideloadly)
+iPhone (FleckStore con certificado propio)
    ↓ Supabase Swift SDK
 Supabase (Postgres + pgvector + Auth + Storage + Edge Functions)
    ↓ HTTPS (proxy seguro)
@@ -112,14 +112,14 @@ El proyecto Xcode se genera automáticamente en CI. GitHub Actions produce un IP
 |---|---|
 | iOS | Swift 5.9, SwiftUI, HealthKit, AVFoundation |
 | Backend DB | Supabase Postgres + pgvector |
-| Auth | Supabase Auth (email + Apple ID) |
+| Auth | Supabase Auth (email + Google OAuth con PKCE) |
 | Storage | Supabase Storage |
 | Realtime | Supabase Realtime v2 |
 | Lógica | Supabase Edge Functions (Deno) |
 | IA | Gemini 3.5 Flash (OpenAI-compatible endpoint) |
 | MCP | `web_search` (Google Search via Gemini) + 7 custom |
 | Build | GitHub Actions `macos-15-arm64` |
-| Distribución | sideloadly (Apple Developer Program) |
+| Distribución | FleckStore con certificado propio (Apple Developer Program) |
 
 ## Licencia
 
