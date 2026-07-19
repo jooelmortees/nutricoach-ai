@@ -86,7 +86,7 @@ La instalación en el iPhone de desarrollo se hace mediante **FleckStore con el 
 5. En **Clients**, crea un cliente OAuth de tipo **Web application**.
 6. Añade como Authorized redirect URI `https://oqkctjzaojyevdxvavaj.supabase.co/auth/v1/callback` sin barra final.
 7. En [Supabase > Authentication > Providers > Google](https://supabase.com/dashboard/project/oqkctjzaojyevdxvavaj/auth/providers?provider=Google), activa el proveedor e introduce el Client ID y Client Secret.
-8. En [Supabase > Authentication > URL Configuration](https://supabase.com/dashboard/project/oqkctjzaojyevdxvavaj/auth/url-configuration), añade exactamente `nutricoach://login-callback/` a Redirect URLs.
+8. En [Supabase > Authentication > URL Configuration](https://supabase.com/dashboard/project/oqkctjzaojyevdxvavaj/auth/url-configuration), configura exactamente `nutricoach://login-callback/` como Site URL y añádela también a Redirect URLs. No dejes `http://localhost:3000` como Site URL: Supabase la usaría como destino de respaldo tras autenticar con Google.
 
 La app usa PKCE mediante `ASWebAuthenticationSession`; no necesita incluir el Client Secret ni el SDK de Google en el binario.
 

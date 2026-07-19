@@ -80,17 +80,21 @@ struct AuthView: View {
             Button {
                 Task { await submit() }
             } label: {
-                if isLoading {
-                    ProgressView().tint(.white)
-                } else {
-                    Text(isSignUp ? "Crear cuenta" : "Entrar")
-                        .font(.headline)
+                ZStack {
+                    if isLoading {
+                        ProgressView().tint(.white)
+                    } else {
+                        Text(isSignUp ? "Crear cuenta" : "Entrar")
+                            .font(.headline)
+                    }
                 }
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .foregroundStyle(.white)
+                .background(.green.gradient, in: RoundedRectangle(cornerRadius: 12))
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity)
-            .padding()
-            .background(.green.gradient, in: RoundedRectangle(cornerRadius: 12))
-            .foregroundStyle(.white)
+            .buttonStyle(.plain)
             .disabled(isLoading || email.isEmpty || password.isEmpty)
 
             Button {
