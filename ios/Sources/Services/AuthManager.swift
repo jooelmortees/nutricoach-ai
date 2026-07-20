@@ -28,6 +28,7 @@ final class AuthManager: ObservableObject {
         do {
             let session = try await supabase.auth.session
             let user = session.user
+            WidgetSnapshotStore.setActiveUser(user.id)
             do {
                 try await loadProfile(userId: user.id)
                 state = .signedIn(user: user)
@@ -40,6 +41,7 @@ final class AuthManager: ObservableObject {
             }
         } catch {
             if let currentSession = supabase.auth.currentSession {
+                WidgetSnapshotStore.setActiveUser(currentSession.user.id)
                 state = .signedIn(user: currentSession.user)
                 authError = error.localizedDescription
                 AppLogger.warning("No se pudo validar la sesion guardada: \(error.localizedDescription)")
@@ -177,6 +179,7 @@ final class AuthManager: ObservableObject {
         profile = nil
         authError = nil
         state = .loading
+        WidgetSnapshotStore.setActiveUser(session.user.id)
         do {
             try await loadProfile(userId: session.user.id)
         } catch {

@@ -19,6 +19,12 @@ enum SharedConfiguration {
     }
 }
 
+enum NutriCoachWidgetKind {
+    static let macros = "com.joelmortees.nutricoach.macros"
+    static let water = "com.joelmortees.nutricoach.water"
+    static let dailyTracking = [macros, water]
+}
+
 struct SharedAuthStorage: AuthLocalStorage, @unchecked Sendable {
     private let sharedStorage: Keychain
     private let legacyStorage: Keychain

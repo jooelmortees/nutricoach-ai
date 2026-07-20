@@ -61,19 +61,37 @@ final class DailyTrackingService {
             source: source.rawValue,
             client_event_id: clientEventId
         )
-        try await client
+        let insertedLogs: [WaterLog] = try await client
             .from("water_logs")
             .upsert(
                 payload,
                 onConflict: "user_id,client_event_id",
                 ignoreDuplicates: true
             )
+            .select()
             .execute()
+            .value
 
         do {
-            try await refreshWidgetSnapshot(userId: resolvedUserId)
+            if !insertedLogs.contains(where: { $0.clientEventId == clientEventId }) {
+                try await refreshWidgetSnapshot(userId: resolvedUserId)
+            } else if try WidgetSnapshotStore.addWater(
+                amountMl: amountMl,
+                clientEventId: clientEventId,
+                userId: resolvedUserId,
+                loggedAt: loggedAt
+            ) {
+                reloadTrackingTimelines()
+            } else {
+                try await refreshWidgetSnapshot(userId: resolvedUserId)
+            }
         } catch {
             logger.warning("No se pudo refrescar el snapshot tras registrar agua: \(error.localizedDescription, privacy: .public)")
+            do {
+                try await refreshWidgetSnapshot(userId: resolvedUserId)
+            } catch {
+                logger.warning("No se pudo recuperar el snapshot de agua: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
@@ -152,6 +170,7 @@ final class DailyTrackingService {
         }
         struct WaterRow: Decodable {
             let amount_ml: Int
+            let client_event_id: String
         }
 
         let profile: Profile = try await client
@@ -175,7 +194,7 @@ final class DailyTrackingService {
             .value
         async let waterRequest: [WaterRow] = client
             .from("water_logs")
-            .select("amount_ml")
+            .select("amount_ml,client_event_id")
             .eq("user_id", value: resolvedUserId.uuidString)
             .gte("logged_at", value: bounds.start)
             .lt("logged_at", value: bounds.end)
@@ -194,7 +213,8 @@ final class DailyTrackingService {
             updatedAt: referenceDate,
             totals: totals,
             profile: profile,
-            waterMl: waterLogs.reduce(0) { $0 + $1.amount_ml }
+            waterMl: waterLogs.reduce(0) { $0 + $1.amount_ml },
+            waterEventIds: waterLogs.map(\.client_event_id)
         )
         try publish(snapshot)
     }
@@ -204,7 +224,8 @@ final class DailyTrackingService {
         updatedAt: Date = Date(),
         totals: DailyMacroTotals,
         profile: Profile,
-        waterMl: Int
+        waterMl: Int,
+        waterEventIds: [String] = []
     ) -> DailyTrackingSnapshot {
         DailyTrackingSnapshot(
             userId: profile.id,
@@ -217,14 +238,32 @@ final class DailyTrackingService {
             carbsTarget: profile.dailyCarbsG,
             fatTarget: profile.dailyFatG,
             waterMl: waterMl,
-            waterTargetMl: profile.dailyWaterTargetMl ?? 2000
+            waterTargetMl: profile.dailyWaterTargetMl ?? 2000,
+            waterSyncErrorAt: nil,
+            waterEventIds: waterEventIds
         )
     }
 
     func publish(_ snapshot: DailyTrackingSnapshot) throws {
         guard snapshot.isForToday else { return }
         if try WidgetSnapshotStore.save(snapshot) {
-            WidgetCenter.shared.reloadAllTimelines()
+            reloadTrackingTimelines()
+        }
+    }
+
+    func markWaterSyncFailed(userId: UUID) {
+        do {
+            if try WidgetSnapshotStore.markWaterSyncFailed(userId: userId) {
+                reloadTrackingTimelines()
+            }
+        } catch {
+            logger.warning("No se pudo mostrar el error de sincronizacion de agua: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func reloadTrackingTimelines() {
+        for kind in NutriCoachWidgetKind.dailyTracking {
+            WidgetCenter.shared.reloadTimelines(ofKind: kind)
         }
     }
 

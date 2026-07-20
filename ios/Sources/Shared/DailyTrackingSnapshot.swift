@@ -20,6 +20,8 @@ struct DailyTrackingSnapshot: Codable, Equatable {
     var fatTarget: Int?
     var waterMl: Int
     var waterTargetMl: Int
+    var waterSyncErrorAt: Date? = nil
+    var waterEventIds: [String]? = nil
 
     static var empty: DailyTrackingSnapshot {
         DailyTrackingSnapshot(
@@ -33,7 +35,9 @@ struct DailyTrackingSnapshot: Codable, Equatable {
             carbsTarget: nil,
             fatTarget: nil,
             waterMl: 0,
-            waterTargetMl: 2000
+            waterTargetMl: 2000,
+            waterSyncErrorAt: nil,
+            waterEventIds: []
         )
     }
 
@@ -49,9 +53,19 @@ struct DailyTrackingSnapshot: Codable, Equatable {
     var isForToday: Bool {
         calendar.isDate(date, inSameDayAs: Date())
     }
+
+    mutating func resetDailyValues(for date: Date) {
+        self.date = date
+        updatedAt = Date()
+        totals = DailyMacroTotals()
+        waterMl = 0
+        waterSyncErrorAt = nil
+        waterEventIds = []
+    }
 }
 
 enum WidgetSnapshotStore {
+    private static let activeUserKey = "widget.activeUserId"
     private static let legacySnapshotKey = "widget.dailyTrackingSnapshot"
     private static let snapshotFileName = "daily-tracking-snapshot.json"
     private static let logger = Logger(
@@ -87,11 +101,24 @@ enum WidgetSnapshotStore {
         return snapshot
     }
 
+    static var activeUserId: UUID? {
+        guard let value = UserDefaults(
+            suiteName: SharedConfiguration.appGroupIdentifier
+        )?.string(forKey: activeUserKey) else {
+            return nil
+        }
+        return UUID(uuidString: value)
+    }
+
+    static func setActiveUser(_ userId: UUID) {
+        UserDefaults(suiteName: SharedConfiguration.appGroupIdentifier)?
+            .set(userId.uuidString, forKey: activeUserKey)
+    }
+
     static func save(_ snapshot: DailyTrackingSnapshot) throws -> Bool {
         guard let url = snapshotURL else {
             throw WidgetSnapshotError.appGroupUnavailable
         }
-        let data = try JSONEncoder().encode(snapshot)
         var didSave = false
         var coordinationError: NSError?
         var operationError: Error?
@@ -101,11 +128,23 @@ enum WidgetSnapshotStore {
             error: &coordinationError
         ) { coordinatedURL in
             do {
-                if FileManager.default.fileExists(atPath: coordinatedURL.path),
-                   let currentSnapshot = try? decodeSnapshot(at: coordinatedURL),
-                   currentSnapshot.updatedAt > snapshot.updatedAt {
+                guard let snapshotUserId = snapshot.userId,
+                      activeUserId == snapshotUserId else {
                     return
                 }
+                var snapshotToSave = snapshot
+                if FileManager.default.fileExists(atPath: coordinatedURL.path),
+                   let currentSnapshot = try? decodeSnapshot(at: coordinatedURL),
+                   currentSnapshot.userId == snapshot.userId {
+                    guard currentSnapshot.updatedAt <= snapshot.updatedAt else {
+                        return
+                    }
+                    if let errorAt = currentSnapshot.waterSyncErrorAt,
+                       errorAt > snapshot.updatedAt {
+                        snapshotToSave.waterSyncErrorAt = errorAt
+                    }
+                }
+                let data = try JSONEncoder().encode(snapshotToSave)
                 try data.write(to: coordinatedURL, options: .atomic)
                 didSave = true
             } catch {
@@ -125,7 +164,49 @@ enum WidgetSnapshotStore {
         return didSave
     }
 
+    static func addWater(
+        amountMl: Int,
+        clientEventId: String,
+        userId: UUID,
+        loggedAt: Date
+    ) throws -> Bool {
+        try update(userId: userId) { snapshot in
+            let calendar = snapshot.calendar
+            guard calendar.isDate(loggedAt, inSameDayAs: Date()) else {
+                return false
+            }
+            if !calendar.isDate(snapshot.date, inSameDayAs: loggedAt) {
+                snapshot.resetDailyValues(for: loggedAt)
+            }
+            if snapshot.waterEventIds?.contains(clientEventId) == true {
+                snapshot.waterSyncErrorAt = nil
+                return true
+            }
+            let (waterMl, overflow) = snapshot.waterMl.addingReportingOverflow(amountMl)
+            guard !overflow else { return false }
+            snapshot.waterMl = waterMl
+            snapshot.updatedAt = Date()
+            snapshot.waterSyncErrorAt = nil
+            var eventIds = snapshot.waterEventIds ?? []
+            eventIds.append(clientEventId)
+            snapshot.waterEventIds = eventIds
+            return true
+        }
+    }
+
+    static func markWaterSyncFailed(userId: UUID) throws -> Bool {
+        try update(userId: userId) { snapshot in
+            if !snapshot.isForToday {
+                snapshot.resetDailyValues(for: Date())
+            }
+            snapshot.waterSyncErrorAt = Date()
+            return true
+        }
+    }
+
     static func clear() {
+        UserDefaults(suiteName: SharedConfiguration.appGroupIdentifier)?
+            .removeObject(forKey: activeUserKey)
         guard let url = snapshotURL else {
             clearLegacySnapshot()
             return
@@ -165,6 +246,47 @@ enum WidgetSnapshotStore {
             DailyTrackingSnapshot.self,
             from: Data(contentsOf: url)
         )
+    }
+
+    private static func update(
+        userId: UUID,
+        mutation: (inout DailyTrackingSnapshot) -> Bool
+    ) throws -> Bool {
+        guard let url = snapshotURL else {
+            throw WidgetSnapshotError.appGroupUnavailable
+        }
+        var didSave = false
+        var coordinationError: NSError?
+        var operationError: Error?
+        NSFileCoordinator().coordinate(
+            writingItemAt: url,
+            options: [],
+            error: &coordinationError
+        ) { coordinatedURL in
+            do {
+                guard FileManager.default.fileExists(atPath: coordinatedURL.path) else {
+                    return
+                }
+                var snapshot = try decodeSnapshot(at: coordinatedURL)
+                guard activeUserId == userId,
+                      snapshot.userId == userId,
+                      mutation(&snapshot) else {
+                    return
+                }
+                let data = try JSONEncoder().encode(snapshot)
+                try data.write(to: coordinatedURL, options: .atomic)
+                didSave = true
+            } catch {
+                operationError = error
+            }
+        }
+        if let coordinationError {
+            throw coordinationError
+        }
+        if let operationError {
+            throw operationError
+        }
+        return didSave
     }
 
     private static func loadLegacySnapshot() -> DailyTrackingSnapshot? {

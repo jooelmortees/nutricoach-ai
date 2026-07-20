@@ -2,7 +2,7 @@ import SwiftUI
 import WidgetKit
 
 struct WaterWidget: Widget {
-    static let kind = "com.joelmortees.nutricoach.water"
+    static let kind = NutriCoachWidgetKind.water
 
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: Self.kind, provider: DailyTrackingProvider()) { entry in
@@ -10,7 +10,7 @@ struct WaterWidget: Widget {
                 .containerBackground(.background, for: .widget)
         }
         .configurationDisplayName("Agua de hoy")
-        .description("Muestra tu hidratacion y registra un vaso sin abrir la app.")
+        .description("Muestra tu hidratación y registra un vaso sin abrir la app.")
         .supportedFamilies([.systemSmall, .systemMedium])
     }
 }
@@ -28,15 +28,21 @@ private struct WaterWidgetView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Label("Agua", systemImage: "drop.fill")
                     .font(.headline)
                     .foregroundStyle(.cyan)
                 Spacer()
-                Text("\(Int(progress * 100))%")
-                    .font(.caption.bold().monospacedDigit())
-                    .foregroundStyle(.secondary)
+                if entry.snapshot.waterSyncErrorAt != nil {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .accessibilityLabel("No se pudo guardar la última cantidad de agua")
+                } else {
+                    Text("\(Int(progress * 100))%")
+                        .font(.caption.bold().monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -47,9 +53,13 @@ private struct WaterWidgetView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            .invalidatableContent()
 
             ProgressView(value: progress)
                 .tint(.cyan)
+                .invalidatableContent()
+                .accessibilityLabel("Progreso de agua")
+                .accessibilityValue("\(entry.snapshot.waterMl) de \(entry.snapshot.waterTargetMl) mililitros")
 
             if let userId = entry.snapshot.userId {
                 HStack(spacing: 8) {
@@ -59,7 +69,7 @@ private struct WaterWidgetView: View {
                     }
                 }
             } else {
-                Text("Abre NutriCoach para iniciar sesion")
+                Text("Abre NutriCoach para iniciar sesión")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -72,9 +82,12 @@ private struct WaterWidgetView: View {
         Button(intent: LogWaterIntent(amountMl: amountMl, userId: userId)) {
             Label("\(amountMl) ml", systemImage: "plus")
                 .font(.caption.bold())
-                .frame(maxWidth: .infinity, minHeight: 30)
+                .frame(maxWidth: .infinity, minHeight: 34)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
         .buttonStyle(.borderedProminent)
         .tint(.cyan)
+        .accessibilityLabel("Añadir \(amountMl) mililitros de agua")
     }
 }

@@ -25,7 +25,9 @@ struct DailyTrackingProvider: TimelineProvider {
                 carbsTarget: 240,
                 fatTarget: 70,
                 waterMl: 1250,
-                waterTargetMl: 2000
+                waterTargetMl: 2000,
+                waterSyncErrorAt: nil,
+                waterEventIds: []
             )
         )
     }
@@ -53,15 +55,12 @@ struct DailyTrackingProvider: TimelineProvider {
 
     private func entry() -> DailyTrackingEntry {
         var snapshot = WidgetSnapshotStore.load() ?? .empty
-        let currentUserId = SupabaseService.shared.client.auth.currentUser?.id
-        guard let currentUserId, snapshot.userId == currentUserId else {
+        guard let activeUserId = WidgetSnapshotStore.activeUserId,
+              snapshot.userId == activeUserId else {
             return DailyTrackingEntry(date: Date(), snapshot: .empty)
         }
         if !snapshot.isForToday {
-            snapshot.date = Date()
-            snapshot.updatedAt = Date()
-            snapshot.totals = DailyMacroTotals()
-            snapshot.waterMl = 0
+            snapshot.resetDailyValues(for: Date())
         }
         return DailyTrackingEntry(date: Date(), snapshot: snapshot)
     }

@@ -499,6 +499,11 @@ final class OnboardingViewModel: ObservableObject {
 
             profileWasSaved = true
             try await auth.refreshProfile()
+            do {
+                try await DailyTrackingService.shared.refreshWidgetSnapshot()
+            } catch {
+                AppLogger.warning("No se pudo actualizar el widget tras completar el perfil: \(error.localizedDescription)")
+            }
         } catch {
             if profileWasSaved {
                 savingErrorMessage = "El perfil se guardó, pero no se pudo recargar: \(error.localizedDescription)"

@@ -116,6 +116,8 @@ targets:
       - sdk: Photos.framework
       - sdk: UserNotifications.framework
       - sdk: AuthenticationServices.framework
+      - sdk: WidgetKit.framework
+      - sdk: AppIntents.framework
 
   NutriCoachWidgets:
     type: app-extension
