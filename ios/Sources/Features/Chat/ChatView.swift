@@ -25,6 +25,7 @@ struct ChatView: View {
     @State private var showPlusMenu: Bool = false
     @State private var showCamera: Bool = false
     @State private var showFullGallery: Bool = false
+    @State private var messageToEdit: ChatMessage?
     @State private var isPinnedToBottom = true
     @State private var shouldFollowResponse = true
     @State private var isUserScrolling = false
@@ -32,14 +33,13 @@ struct ChatView: View {
     @State private var isFollowScrollPending = false
     @State private var isSettlingSentMessage = false
     @State private var bottomDistance = CGFloat.greatestFiniteMagnitude
-    @State private var bottomContentSpacing: CGFloat = 72
     @State private var scrollToBottomRequest = 0
     @State private var animatedFollowRequestID: Int?
     @State private var manualScrollGeneration = 0
     @State private var recordingTask: Task<Void, Never>?
 
     private let bottomAnchorId = "chat-bottom-anchor"
-    private let responseFollowSpacing: CGFloat = 72
+    private let bottomPinTolerance: CGFloat = 1
     private let followReattachmentThreshold: CGFloat = 96
 
     var body: some View {
@@ -66,12 +66,6 @@ struct ChatView: View {
                         } label: {
                             Label("Nueva conversacion", systemImage: "plus.bubble.fill")
                         }
-                        Button {
-                            Task { await viewModel.regenerateLastResponse() }
-                        } label: {
-                            Label("Regenerar respuesta", systemImage: "arrow.clockwise")
-                        }
-                        .disabled(viewModel.messages.last(where: { $0.role == .user }) == nil || viewModel.isAgentThinking)
                         Divider()
                         Button(role: .destructive) {
                             showClearConfirm = true
@@ -104,6 +98,18 @@ struct ChatView: View {
                     onCancel: {}
                 )
                 .ignoresSafeArea()
+            }
+            .sheet(item: $messageToEdit) { message in
+                EditChatMessageSheet(message: message) { editedContent in
+                    let edited = await viewModel.editMessage(
+                        id: message.id,
+                        content: editedContent
+                    )
+                    if edited {
+                        requestFollowScroll()
+                    }
+                    return edited
+                }
             }
             .photosPicker(
                 isPresented: $showFullGallery,
@@ -230,9 +236,21 @@ struct ChatView: View {
                                 MessageRow(
                                     message: msg,
                                     audioPlayback: audioPlayback,
+                                    canModifyConversation: !viewModel.isAgentThinking && !viewModel.isSending,
                                     onImageTap: { url in fullscreenImageURL = url },
                                     onSaveMeal: { meal in
                                         await viewModel.saveMeal(meal)
+                                    },
+                                    onEdit: {
+                                        inputFocused = false
+                                        messageToEdit = msg
+                                    },
+                                    onRegenerate: {
+                                        Task {
+                                            if await viewModel.regenerateResponse(for: msg.id) {
+                                                requestFollowScroll()
+                                            }
+                                        }
                                     }
                                 )
                                 .equatable()
@@ -244,7 +262,7 @@ struct ChatView: View {
                             }
 
                             Color.clear
-                                .frame(height: bottomContentSpacing)
+                                .frame(height: 0)
                                 .id(bottomAnchorId)
                                 .background {
                                     GeometryReader { marker in
@@ -281,10 +299,6 @@ struct ChatView: View {
                                 if isSeekingLatestMessage,
                                    bottomDistance <= followReattachmentThreshold {
                                     requestFollowScroll()
-                                } else {
-                                    withAnimation(.easeOut(duration: 0.15)) {
-                                        bottomContentSpacing = 12
-                                    }
                                 }
                             }
                     )
@@ -308,7 +322,7 @@ struct ChatView: View {
                 .onPreferenceChange(ChatBottomPositionPreferenceKey.self) { bottomY in
                     let distance = bottomY - viewport.size.height
                     bottomDistance = distance
-                    isPinnedToBottom = distance <= responseFollowSpacing
+                    isPinnedToBottom = distance <= bottomPinTolerance
                     if isPinnedToBottom {
                         isFollowScrollPending = false
                     }
@@ -566,7 +580,6 @@ struct ChatView: View {
         shouldFollowResponse = true
         isSeekingLatestMessage = false
         isFollowScrollPending = keepButtonVisible
-        bottomContentSpacing = responseFollowSpacing
         requestScrollToBottom(animated: animated)
     }
 
@@ -605,6 +618,97 @@ struct ChatView: View {
             await viewModel.loadOlderMessages()
             await Task.yield()
             proxy.scrollTo(anchorId, anchor: .top)
+        }
+    }
+}
+
+private struct EditChatMessageSheet: View {
+    let message: ChatMessage
+    let onSave: (String) async -> Bool
+
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var isEditorFocused: Bool
+    @State private var editedContent: String
+    @State private var isSaving = false
+    @State private var saveError: String?
+
+    init(
+        message: ChatMessage,
+        onSave: @escaping (String) async -> Bool
+    ) {
+        self.message = message
+        self.onSave = onSave
+        _editedContent = State(initialValue: message.content)
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                TextEditor(text: $editedContent)
+                    .focused($isEditorFocused)
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    .background(
+                        Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 8)
+                    )
+
+                if let saveError {
+                    Text(saveError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+            .padding(16)
+            .navigationTitle("Editar mensaje")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancelar") {
+                        dismiss()
+                    }
+                    .disabled(isSaving)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Guardar") {
+                        save()
+                    }
+                    .disabled(!canSave || isSaving)
+                }
+            }
+            .overlay {
+                if isSaving {
+                    ProgressView()
+                        .padding(14)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .interactiveDismissDisabled(isSaving)
+        .onAppear {
+            isEditorFocused = true
+        }
+    }
+
+    private var canSave: Bool {
+        !editedContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            !(message.attachments?.isEmpty ?? true)
+    }
+
+    private func save() {
+        isEditorFocused = false
+        isSaving = true
+        saveError = nil
+        Task {
+            let saved = await onSave(editedContent)
+            isSaving = false
+            if saved {
+                dismiss()
+            } else {
+                saveError = "No se pudo editar el mensaje. Inténtalo de nuevo."
+            }
         }
     }
 }

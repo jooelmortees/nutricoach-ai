@@ -32,15 +32,21 @@ struct ChatMarkdownView: View {
 struct StreamingChatMarkdownView: View {
     let text: String
     let isStreaming: Bool
+    let onRevealFinished: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @StateObject private var source: ChatMarkdownSource
     @StateObject private var interactions = ChatMarkdownInteractions()
 
-    init(text: String, isStreaming: Bool) {
+    init(
+        text: String,
+        isStreaming: Bool,
+        onRevealFinished: @escaping () -> Void
+    ) {
         self.text = text
         self.isStreaming = isStreaming
+        self.onRevealFinished = onRevealFinished
         _source = StateObject(wrappedValue: ChatMarkdownSource(initialText: text))
     }
 
@@ -63,9 +69,13 @@ struct StreamingChatMarkdownView: View {
         }
         .chatMarkdownExporter(interactions)
         .onAppear {
+            source.setRevealImmediately(reduceMotion)
             source.update(text)
             if !isStreaming {
                 source.finish(with: text)
+            }
+            if source.hasFinishedRevealing {
+                onRevealFinished()
             }
         }
         .onChange(of: text) { _, newText in
@@ -75,6 +85,14 @@ struct StreamingChatMarkdownView: View {
             if !streaming {
                 source.finish(with: text)
             }
+        }
+        .onChange(of: source.hasFinishedRevealing) { _, finished in
+            if finished {
+                onRevealFinished()
+            }
+        }
+        .onChange(of: reduceMotion) { _, shouldReduceMotion in
+            source.setRevealImmediately(shouldReduceMotion)
         }
     }
 }
@@ -150,25 +168,41 @@ private extension View {
 }
 
 private final class ChatMarkdownSource: ObservableObject, StreamedMarkdownSource, @unchecked Sendable {
+    private static let revealInterval = DispatchTimeInterval.milliseconds(4)
+
     private let stateQueue = DispatchQueue(label: "com.nutricoach.chat-markdown-source")
-    private var latestText: String
+    private var targetText: String
+    private var displayedText = ""
+    private var pendingScalars: [Unicode.Scalar]
+    private var pendingScalarIndex = 0
+    private var pendingReplacement: String?
+    private var pendingSnapshot: String?
+    private var revealImmediately = false
+    private var finishRequested = false
     private var isFinished = false
-    private var continuations: [UUID: AsyncStream<String>.Continuation] = [:]
+    private var activeSubscriptionID: UUID?
+    private var continuation: AsyncStream<String>.Continuation?
+    private var revealTimer: DispatchSourceTimer?
+    @Published private(set) var hasFinishedRevealing = false
 
     var text: AsyncStream<String> {
         let subscriptionID = UUID()
         let stream = AsyncStream.makeStream(
             of: String.self,
-            bufferingPolicy: .bufferingNewest(1)
+            // Un único snapshot pendiente aplica backpressure sin saltar caracteres.
+            bufferingPolicy: .bufferingOldest(1)
         )
         stream.continuation.onTermination = { [weak self] _ in
             self?.removeContinuation(subscriptionID)
         }
 
         let shouldFinish = stateQueue.sync {
-            stream.continuation.yield(latestText)
+            stream.continuation.yield(displayedText)
             if !isFinished {
-                continuations[subscriptionID] = stream.continuation
+                continuation?.finish()
+                activeSubscriptionID = subscriptionID
+                continuation = stream.continuation
+                startRevealTimerIfNeeded()
             }
             return isFinished
         }
@@ -180,15 +214,29 @@ private final class ChatMarkdownSource: ObservableObject, StreamedMarkdownSource
     }
 
     init(initialText: String) {
-        latestText = initialText
+        targetText = initialText
+        pendingScalars = Array(initialText.unicodeScalars)
     }
 
     func update(_ newText: String) {
         stateQueue.sync {
-            guard !isFinished, newText != latestText else { return }
-            latestText = newText
-            for continuation in continuations.values {
-                continuation.yield(newText)
+            guard !isFinished, !finishRequested else { return }
+            enqueue(newText)
+            startRevealTimerIfNeeded()
+        }
+    }
+
+    func setRevealImmediately(_ shouldRevealImmediately: Bool) {
+        stateQueue.sync {
+            guard revealImmediately != shouldRevealImmediately else { return }
+            revealImmediately = shouldRevealImmediately
+            if shouldRevealImmediately,
+               !displayedText.utf8.elementsEqual(targetText.utf8) {
+                pendingScalars.removeAll(keepingCapacity: true)
+                pendingScalarIndex = 0
+                pendingReplacement = targetText
+                pendingSnapshot = nil
+                startRevealTimerIfNeeded()
             }
         }
     }
@@ -196,20 +244,138 @@ private final class ChatMarkdownSource: ObservableObject, StreamedMarkdownSource
     func finish(with finalText: String) {
         stateQueue.sync {
             guard !isFinished else { return }
-            latestText = finalText
-            isFinished = true
-            for continuation in continuations.values {
-                continuation.yield(finalText)
-                continuation.finish()
-            }
-            continuations.removeAll()
+            enqueue(finalText)
+            finishRequested = true
+            finishIfReady()
+            startRevealTimerIfNeeded()
         }
     }
 
     private func removeContinuation(_ id: UUID) {
         stateQueue.async { [weak self] in
-            self?.continuations.removeValue(forKey: id)
+            guard let self else { return }
+            guard activeSubscriptionID == id else { return }
+            activeSubscriptionID = nil
+            continuation = nil
+            stopRevealTimer()
         }
+    }
+
+    private func enqueue(_ newText: String) {
+        guard !newText.utf8.elementsEqual(targetText.utf8) else { return }
+        if revealImmediately {
+            targetText = newText
+            pendingScalars.removeAll(keepingCapacity: true)
+            pendingScalarIndex = 0
+            pendingReplacement = newText
+            pendingSnapshot = nil
+            return
+        }
+        guard newText.utf8.starts(with: targetText.utf8) else {
+            targetText = newText
+            pendingScalars.removeAll(keepingCapacity: true)
+            pendingScalarIndex = 0
+            pendingReplacement = newText
+            pendingSnapshot = nil
+            return
+        }
+
+        pendingScalars.append(
+            contentsOf: newText.unicodeScalars.dropFirst(targetText.unicodeScalars.count)
+        )
+        targetText = newText
+    }
+
+    private func startRevealTimerIfNeeded() {
+        guard revealTimer == nil,
+              continuation != nil,
+              pendingReplacement != nil || pendingScalarIndex < pendingScalars.count else { return }
+
+        let timer = DispatchSource.makeTimerSource(queue: stateQueue)
+        timer.schedule(
+            deadline: .now(),
+            repeating: Self.revealInterval,
+            leeway: .milliseconds(1)
+        )
+        timer.setEventHandler { [weak self] in
+            self?.revealNextScalar()
+        }
+        revealTimer = timer
+        timer.resume()
+    }
+
+    private func revealNextScalar() {
+        if let pendingReplacement {
+            guard yieldSnapshot(pendingReplacement) else { return }
+            displayedText = pendingReplacement
+            self.pendingReplacement = nil
+            if pendingScalarIndex == pendingScalars.count {
+                stopRevealTimer()
+                finishIfReady()
+            }
+            return
+        }
+
+        guard pendingScalarIndex < pendingScalars.count else {
+            stopRevealTimer()
+            finishIfReady()
+            return
+        }
+
+        let nextText = pendingSnapshot ?? (displayedText + String(pendingScalars[pendingScalarIndex]))
+        pendingSnapshot = nextText
+        guard yieldSnapshot(nextText) else { return }
+        pendingSnapshot = nil
+        displayedText = nextText
+        pendingScalarIndex += 1
+
+        if pendingScalarIndex == pendingScalars.count {
+            pendingScalars.removeAll(keepingCapacity: true)
+            pendingScalarIndex = 0
+            stopRevealTimer()
+            finishIfReady()
+        }
+    }
+
+    private func finishIfReady() {
+        guard finishRequested,
+              pendingReplacement == nil,
+              pendingScalarIndex == pendingScalars.count,
+              displayedText.utf8.elementsEqual(targetText.utf8) else { return }
+        isFinished = true
+        continuation?.finish()
+        activeSubscriptionID = nil
+        continuation = nil
+        stopRevealTimer()
+        DispatchQueue.main.async { [weak self] in
+            self?.hasFinishedRevealing = true
+        }
+    }
+
+    private func yieldSnapshot(_ snapshot: String) -> Bool {
+        guard let continuation else {
+            stopRevealTimer()
+            return false
+        }
+        switch continuation.yield(snapshot) {
+        case .enqueued:
+            return true
+        case .dropped:
+            return false
+        case .terminated:
+            activeSubscriptionID = nil
+            self.continuation = nil
+            stopRevealTimer()
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
+    private func stopRevealTimer() {
+        revealTimer?.setEventHandler {}
+        revealTimer?.cancel()
+        revealTimer = nil
     }
 }
 

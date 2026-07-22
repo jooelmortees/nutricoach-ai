@@ -10,21 +10,28 @@ import SwiftUI
 struct MessageRow: View, Equatable {
     let message: ChatMessage
     let audioPlayback: AudioPlaybackController
+    let canModifyConversation: Bool
     let onImageTap: (String) -> Void
     let onSaveMeal: (PendingMeal) async -> Bool
+    let onEdit: () -> Void
+    let onRegenerate: () -> Void
 
     static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
-        lhs.message == rhs.message && lhs.audioPlayback === rhs.audioPlayback
+        lhs.message == rhs.message &&
+            lhs.audioPlayback === rhs.audioPlayback &&
+            lhs.canModifyConversation == rhs.canModifyConversation
     }
 
     @ViewBuilder
     var body: some View {
         if message.role == .user {
             contentStack
+                .contextMenu { messageActions }
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.vertical, 10)
         } else {
             contentStack
+                .contextMenu { messageActions }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 10)
         }
@@ -81,13 +88,6 @@ struct MessageRow: View, Equatable {
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
             .foregroundStyle(.primary)
             .frame(maxWidth: 280, alignment: .trailing)
-            .contextMenu {
-                Button {
-                    UIPasteboard.general.string = message.content
-                } label: {
-                    Label("Copiar", systemImage: "doc.on.doc")
-                }
-            }
         } else {
             // ASSISTANT: Markdown sin bocadillo, pegado a la izquierda
             StreamingAssistantContent(
@@ -95,13 +95,33 @@ struct MessageRow: View, Equatable {
                 isStreaming: message.isStreaming,
                 onSaveMeal: onSaveMeal
             )
-            .contextMenu {
-                Button {
-                    UIPasteboard.general.string = message.content
-                } label: {
-                    Label("Copiar", systemImage: "doc.on.doc")
-                }
+        }
+    }
+
+    @ViewBuilder
+    private var messageActions: some View {
+        if !message.content.isEmpty {
+            Button {
+                UIPasteboard.general.string = message.content
+            } label: {
+                Label("Copiar", systemImage: "doc.on.doc")
             }
+        }
+
+        if message.role == .user {
+            Button {
+                onEdit()
+            } label: {
+                Label("Editar mensaje", systemImage: "square.and.pencil")
+            }
+            .disabled(!canModifyConversation)
+        } else {
+            Button {
+                onRegenerate()
+            } label: {
+                Label("Regenerar respuesta", systemImage: "arrow.clockwise")
+            }
+            .disabled(!canModifyConversation)
         }
     }
 }
@@ -111,7 +131,10 @@ private struct StreamingAssistantContent: View {
     let isStreaming: Bool
     let onSaveMeal: (PendingMeal) async -> Bool
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var usesStreamingRenderer: Bool
+    @State private var hasFinishedReveal: Bool
+    @State private var isFinishingReveal = false
 
     init(
         text: String,
@@ -122,11 +145,13 @@ private struct StreamingAssistantContent: View {
         self.isStreaming = isStreaming
         self.onSaveMeal = onSaveMeal
         _usesStreamingRenderer = State(initialValue: isStreaming)
+        _hasFinishedReveal = State(initialValue: !isStreaming)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if !isStreaming,
+               hasFinishedReveal,
                let extracted = PendingMeal.extract(from: text),
                let macros = extracted.macros {
                 if !extracted.cleaned.isEmpty {
@@ -136,15 +161,39 @@ private struct StreamingAssistantContent: View {
                     await onSaveMeal(editedMeal)
                 })
             } else if usesStreamingRenderer {
-                StreamingChatMarkdownView(text: text, isStreaming: isStreaming)
+                StreamingChatMarkdownView(
+                    text: text,
+                    isStreaming: isStreaming,
+                    onRevealFinished: finishReveal
+                )
             } else {
                 ChatMarkdownView(text: text)
             }
 
-            if isStreaming {
+            if isStreaming || !hasFinishedReveal {
                 StreamingDotsIndicator()
                     .padding(.top, 2)
             }
+        }
+    }
+
+    private func finishReveal() {
+        guard !hasFinishedReveal, !isFinishingReveal else { return }
+        if reduceMotion {
+            hasFinishedReveal = true
+            return
+        }
+        isFinishingReveal = true
+        Task { @MainActor in
+            do {
+                // El renderer mantiene cada carácter en fundido durante 0,5 segundos.
+                try await Task.sleep(for: .milliseconds(550))
+            } catch {
+                isFinishingReveal = false
+                return
+            }
+            hasFinishedReveal = true
+            isFinishingReveal = false
         }
     }
 }

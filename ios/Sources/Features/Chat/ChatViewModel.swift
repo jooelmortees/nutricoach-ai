@@ -115,46 +115,115 @@ final class ChatViewModel: ObservableObject {
         hasMoreHistory = false
     }
 
-    /// Regenera la ultima respuesta del asistente. Toma el ultimo mensaje del
-    /// usuario, lo reenvia, y reemplaza la respuesta del asistente.
-    func regenerateLastResponse() async {
-        guard currentConversationId != nil else { return }
-        cancelActiveStream()
-        // Buscar el ultimo user message
-        guard let lastUserIdx = messages.lastIndex(where: { $0.role == .user }) else { return }
-        let lastUser = messages[lastUserIdx]
-        let resendAttachments = lastUser.attachments?
-            .filter { $0.bucket != nil && $0.path != nil }
-            .map(\.agentAttachment) ?? []
-        guard !lastUser.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !resendAttachments.isEmpty else {
-            errorMessage = "No se puede regenerar un audio antiguo sin volver a grabarlo."
-            return
+    /// Regenera la respuesta seleccionada y descarta los turnos posteriores.
+    @discardableResult
+    func regenerateResponse(for assistantMessageId: UUID) async -> Bool {
+        guard !isSending, !isAgentThinking,
+              let conversationId = currentConversationId,
+              let assistantIndex = messages.firstIndex(where: {
+                  $0.id == assistantMessageId && $0.role == .assistant
+              }),
+              let userIndex = messages[..<assistantIndex].lastIndex(where: {
+                  $0.role == .user
+              }) else { return false }
+
+        let generation = conversationGeneration
+        let userMessage = messages[userIndex]
+        let attachments = reusableAttachments(from: userMessage)
+        guard attachments.count == (userMessage.attachments?.count ?? 0) else {
+            errorMessage = "No se puede reutilizar un mensaje con adjuntos antiguos."
+            return false
         }
-        let responseIds = messages.suffix(from: lastUserIdx + 1)
-            .filter { $0.role == .assistant }
-            .map(\.id)
+        guard !userMessage.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !attachments.isEmpty else {
+            errorMessage = "No se puede regenerar este mensaje."
+            return false
+        }
+
+        isSending = true
+        errorMessage = nil
+        defer { isSending = false }
         do {
-            try await agent.deleteMessages(ids: responseIds)
+            try await agent.deleteMessages(
+                ids: messages.suffix(from: userIndex + 1).map(\.id)
+            )
         } catch {
             errorMessage = "No se pudo regenerar la respuesta: \(error.localizedDescription)"
-            return
+            return false
         }
-        // Eliminar todos los mensajes posteriores al user (assistant + posteriores)
-        let newMessages = Array(messages.prefix(lastUserIdx + 1))
-        messages = newMessages
-        // Reenviar (sin adjuntos, ya estan en BD)
+        guard conversationGeneration == generation,
+              currentConversationId == conversationId else { return false }
+
+        messages = Array(messages.prefix(userIndex + 1))
         isAgentThinking = true
-        let assistantMsg = ChatMessage(role: .assistant, content: "", isStreaming: true)
-        messages.append(assistantMsg)
+        let assistantMessage = ChatMessage(role: .assistant, content: "", isStreaming: true)
+        messages.append(assistantMessage)
         startStream(
-            conversationId: currentConversationId!,
-            clientMessageId: lastUser.id,
-            message: lastUser.content,
-            attachments: resendAttachments,
-            assistantMessageId: assistantMsg.id,
+            conversationId: conversationId,
+            clientMessageId: userMessage.id,
+            message: userMessage.content,
+            attachments: attachments,
+            assistantMessageId: assistantMessage.id,
             webSearch: false
         )
+        return true
+    }
+
+    /// Sustituye un mensaje del usuario y vuelve a generar la conversación desde él.
+    @discardableResult
+    func editMessage(id messageId: UUID, content: String) async -> Bool {
+        guard !isSending, !isAgentThinking,
+              let conversationId = currentConversationId,
+              let userIndex = messages.firstIndex(where: {
+                  $0.id == messageId && $0.role == .user
+              }) else { return false }
+
+        let editedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let originalMessage = messages[userIndex]
+        let attachments = reusableAttachments(from: originalMessage)
+        guard attachments.count == (originalMessage.attachments?.count ?? 0) else {
+            errorMessage = "No se puede editar un mensaje con adjuntos antiguos."
+            return false
+        }
+        guard !editedContent.isEmpty || !attachments.isEmpty else {
+            errorMessage = "El mensaje no puede quedar vacío."
+            return false
+        }
+        guard editedContent != originalMessage.content else { return true }
+
+        let generation = conversationGeneration
+        isSending = true
+        errorMessage = nil
+        defer { isSending = false }
+        do {
+            try await agent.deleteMessages(
+                ids: messages.suffix(from: userIndex).map(\.id)
+            )
+        } catch {
+            errorMessage = "No se pudo editar el mensaje: \(error.localizedDescription)"
+            return false
+        }
+        guard conversationGeneration == generation,
+              currentConversationId == conversationId else { return false }
+
+        let editedMessage = ChatMessage(
+            role: .user,
+            content: editedContent,
+            attachments: originalMessage.attachments
+        )
+        messages = Array(messages.prefix(userIndex)) + [editedMessage]
+        isAgentThinking = true
+        let assistantMessage = ChatMessage(role: .assistant, content: "", isStreaming: true)
+        messages.append(assistantMessage)
+        startStream(
+            conversationId: conversationId,
+            clientMessageId: editedMessage.id,
+            message: editedContent,
+            attachments: attachments,
+            assistantMessageId: assistantMessage.id,
+            webSearch: false
+        )
+        return true
     }
 
     /// Quita una imagen pendiente por su id (boton X del preview).
@@ -357,6 +426,12 @@ final class ChatViewModel: ObservableObject {
         streamTask = nil
         isAgentThinking = false
         isSending = false
+    }
+
+    private func reusableAttachments(from message: ChatMessage) -> [AgentAttachment] {
+        message.attachments?
+            .filter { $0.bucket != nil && $0.path != nil }
+            .map(\.agentAttachment) ?? []
     }
 
     private func makeChatMessages(from history: [HistoryMessage]) async -> [ChatMessage] {

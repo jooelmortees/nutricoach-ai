@@ -197,14 +197,13 @@ final class AgentService {
     }
 
     func deleteMessages(ids: [UUID]) async throws {
+        guard !ids.isEmpty else { return }
         let supabase = SupabaseService.shared.client
-        for id in ids {
-            try await supabase
-                .from("messages")
-                .delete()
-                .eq("id", value: id.uuidString)
-                .execute()
-        }
+        try await supabase
+            .from("messages")
+            .delete()
+            .in("id", values: ids.map(\.uuidString))
+            .execute()
     }
 
     /// Crea una conversación nueva
