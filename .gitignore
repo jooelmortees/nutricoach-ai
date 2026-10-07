@@ -17,7 +17,7 @@ xcuserdata/
 *.dSYM
 
 # XcodeGen
-ios/project.xcodeproj/
+ios/*.xcodeproj/
 
 # Swift Package Manager
 .swiftpm/
