@@ -83,6 +83,8 @@ jobs:
           OPENCODE_GO_BASE_URL: ${{ vars.OPENCODE_GO_BASE_URL || 'https://opencode.ai/zen/go/v1' }}
           OPENCODE_GO_MODEL: ${{ vars.OPENCODE_GO_MODEL || 'deepseek-v4.1-flash' }}
           OPENCODE_GO_FALLBACK_MODEL: ${{ vars.OPENCODE_GO_FALLBACK_MODEL || 'glm-5.3-flash' }}
+          OPENCODE_GO_PLAN_MODEL: ${{ vars.OPENCODE_GO_PLAN_MODEL || 'glm-5.3-flash' }}
+          OPENCODE_GO_PLAN_FALLBACK_MODEL: ${{ vars.OPENCODE_GO_PLAN_FALLBACK_MODEL || 'deepseek-v4.1-flash' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_BASE_URL: ${{ vars.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.5-flash' }}
@@ -103,6 +105,8 @@ jobs:
               OPENCODE_GO_BASE_URL="$OPENCODE_GO_BASE_URL" \
               OPENCODE_GO_MODEL="$OPENCODE_GO_MODEL" \
               OPENCODE_GO_FALLBACK_MODEL="$OPENCODE_GO_FALLBACK_MODEL" \
+              OPENCODE_GO_PLAN_MODEL="$OPENCODE_GO_PLAN_MODEL" \
+              OPENCODE_GO_PLAN_FALLBACK_MODEL="$OPENCODE_GO_PLAN_FALLBACK_MODEL" \
               --project-ref "$SUPABASE_PROJECT_REF"
           else
             echo "OPENCODE_GO_API_KEY no esta en GitHub Secrets: las Edge Functions seguiran usando Gemini."

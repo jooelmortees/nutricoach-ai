@@ -56,6 +56,12 @@ ningún modelo de OpenCode Go acepta audio)
 - El gateway exige `x-opencode-session` por conversación; el chat ya tiene `conversation_id`
 - Notas de voz siguen en Gemini porque DeepSeek no acepta `input_audio`
 
+### Por qué los planes van con GLM-5.3-Flash
+- Medido 2026-10-07: un día de plan tarda ~18s con GLM frente a ~72s con DeepSeek
+- Con DeepSeek, un plan semanal no cabe en el presupuesto de tiempo de la Edge Function
+- Los días se generan en paralelo (concurrencia limitada) y se validan alérgenos por día
+- Fallback a `deepseek-v4.1-flash` si GLM falla
+
 ### Por qué wger + USDA FDC
 - Open source, sin coste por API call, sin riesgo de cierre
 - Datos verificados por la comunidad

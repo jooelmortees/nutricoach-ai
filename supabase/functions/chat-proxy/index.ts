@@ -8,7 +8,7 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 import { fetchChatCompletion } from "../_shared/llm.ts";
-import { geminiConfig, textProvider } from "../_shared/providers.ts";
+import { geminiConfig, planProvider, textProvider } from "../_shared/providers.ts";
 import { generateDetailedMealPlan } from "../_shared/meal-plan.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -18,7 +18,9 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 // Motor de texto, vision y planes. Si OPENCODE_GO_API_KEY no esta
 // configurada, textProvider() degrada a Gemini automaticamente.
 const TEXT_PROVIDER = textProvider();
-console.log(`chat-proxy LLM: ${TEXT_PROVIDER.label}/${TEXT_PROVIDER.primaryModel}`);
+// Los planes van con el modelo de planes (GLM: 4x mas rapido que deepseek).
+const PLAN_PROVIDER = planProvider();
+console.log(`chat-proxy LLM: ${TEXT_PROVIDER.label}/${TEXT_PROVIDER.primaryModel} | plan: ${PLAN_PROVIDER.primaryModel}`);
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "app.nutricoach://",
@@ -1483,10 +1485,10 @@ async function executeTool(
         }
 
         const generated = await generateDetailedMealPlan({
-          apiKey: TEXT_PROVIDER.apiKey,
-          baseUrl: TEXT_PROVIDER.baseUrl,
-          primaryModel: TEXT_PROVIDER.primaryModel,
-          fallbackModel: TEXT_PROVIDER.fallbackModel,
+          apiKey: PLAN_PROVIDER.apiKey,
+          baseUrl: PLAN_PROVIDER.baseUrl,
+          primaryModel: PLAN_PROVIDER.primaryModel,
+          fallbackModel: PLAN_PROVIDER.fallbackModel,
           sessionId: `plan:${userId}`,
           profile,
           facts,

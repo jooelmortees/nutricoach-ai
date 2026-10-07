@@ -49,3 +49,22 @@ export function textProvider(): LlmProviderConfig {
   console.warn("OPENCODE_GO_API_KEY no configurada: usando Gemini por defecto");
   return geminiConfig();
 }
+
+const DEFAULT_PLAN_MODEL = "glm-5.3-flash";
+const DEFAULT_PLAN_FALLBACK_MODEL = "deepseek-v4.1-flash";
+
+/**
+ * Proveedor para generar planes de comidas: GLM (mas rapido) con fallback
+ * a DeepSeek. Medido empiricamente 2026-10-07: un dia de plan tarda ~18s
+ * con glm-5.3-flash frente a ~72s con deepseek-v4.1-flash, y con este
+ * ultimo un plan semanal no cabe en el presupuesto de tiempo.
+ */
+export function planProvider(): LlmProviderConfig {
+  const go = openCodeGoConfig();
+  if (!go) return geminiConfig();
+  return {
+    ...go,
+    primaryModel: Deno.env.get("OPENCODE_GO_PLAN_MODEL") ?? DEFAULT_PLAN_MODEL,
+    fallbackModel: Deno.env.get("OPENCODE_GO_PLAN_FALLBACK_MODEL") ?? DEFAULT_PLAN_FALLBACK_MODEL,
+  };
+}

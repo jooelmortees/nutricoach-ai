@@ -9,6 +9,8 @@ interface GenerateDetailedMealPlanOptions {
   fallbackModel: string;
   /** Identificador de sesion para el proveedor (x-opencode-session). */
   sessionId?: string;
+  /** Dias generados a la vez (por defecto: todos los solicitados). */
+  concurrency?: number;
   profile: any;
   facts: any[];
   recentMeals?: any[];
@@ -26,6 +28,13 @@ interface ParsedMealDay {
   errors: string[];
 }
 
+interface SkeletonMeal {
+  type: string;
+  name: string;
+}
+
+type WeekSkeleton = Record<string, SkeletonMeal[]>;
+
 const WEEK_DAYS = [
   "lunes",
   "martes",
@@ -36,8 +45,16 @@ const WEEK_DAYS = [
   "domingo",
 ];
 const MEAL_TYPES = ["breakfast", "lunch", "dinner", "snack"];
-const PLAN_GENERATION_BUDGET_MS = 125_000;
-const MEAL_DAY_MAX_ATTEMPTS = 2;
+// 140s: el cliente iOS espera hasta 145s y las Edge Functions de Supabase
+// cortan a los 150s. Cabe el esqueleto semanal (~30s) mas dos pasadas de
+// generacion con GLM (medido 2026-10-07).
+const PLAN_GENERATION_BUDGET_MS = 140_000;
+const MEAL_DAY_MAX_ATTEMPTS = 3;
+const MEAL_DAY_MAX_ATTEMPTS_WEEKLY = 2;
+// El esqueleto tiene un unico intento: si falla, los dias se generan sin
+// platos asignados (algo menos de variedad) en lugar de consumir el
+// presupuesto de tiempo en otro esqueleto.
+const SKELETON_MAX_ATTEMPTS = 1;
 const ALLERGEN_ALIASES: Record<string, string[]> = {
   gluten: ["trigo", "cebada", "centeno", "pan", "pasta", "harina", "cuscus", "tortilla de trigo"],
   leche: ["leche", "lactosa", "queso", "yogur", "mantequilla", "nata", "suero", "whey"],
@@ -64,15 +81,45 @@ export async function generateDetailedMealPlan(
   const safeNotes = normalizeNotes(options.notes);
   const promptOptions = { ...options, notes: safeNotes };
 
-  for (const day of requestedDays) {
-    const prompt = buildDetailedMealDayPrompt(promptOptions, day, usedMealNames);
+  // Los dias se generan en paralelo (concurrencia limitada) porque en
+  // secuencial un plan semanal supera el presupuesto de tiempo: medido
+  // 2026-10-07, ~72s por dia con deepseek y ~80s los 7 en paralelo.
+  const concurrency = Math.min(
+    Math.max(options.concurrency ?? requestedDays.length, 1),
+    requestedDays.length,
+  );
+  let fatalErrors: string[] | null = null;
+  let nextDayIndex = 0;
+
+  // Fase previa para planes semanales: un esqueleto con los 28 platos de la
+  // semana, sin repetir ninguno. Los dias se generan en paralelo y no se ven
+  // entre si (medido 2026-10-07: sin esqueleto repetian la misma cena los 7
+  // dias). Si el esqueleto falla, se continua sin el (menos variedad).
+  let skeleton: WeekSkeleton | null = null;
+  if (options.type === "weekly" && requestedDays.length > 1) {
+    skeleton = await generateWeekSkeleton(options, deadlineAt);
+    if (!skeleton) {
+      console.warn("Esqueleto semanal no disponible: los dias se generan sin platos asignados");
+    }
+  }
+
+  const generateDay = async (day: string): Promise<ParsedMealDay> => {
+    const assignedMeals = skeleton?.[normalizeDay(day)] ?? null;
+    const prompt = buildDetailedMealDayPrompt(
+      promptOptions,
+      day,
+      assignedMeals ? [] : [...usedMealNames],
+      assignedMeals,
+    );
     let parsed: ParsedMealDay = { day: null, errors: [] };
     let lastRawContent = "";
+    const maxAttempts = requestedDays.length > 1 ? MEAL_DAY_MAX_ATTEMPTS_WEEKLY : MEAL_DAY_MAX_ATTEMPTS;
 
-    // Reintento por dia: DeepSeek no soporta json_schema estricto
+    // Reintentos por dia: DeepSeek no soporta json_schema estricto
     // (verificado empiricamente 2026-10-07), asi que si el JSON no valida
-    // se reintenta una vez indicando al modelo los errores concretos.
-    for (let attempt = 0; attempt < MEAL_DAY_MAX_ATTEMPTS; attempt++) {
+    // se reintenta indicando al modelo los errores concretos (2 intentos
+    // en planes semanales y 3 en diarios).
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const messages: Array<Record<string, unknown>> = [
         { role: "system", content: prompt.system },
         { role: "user", content: prompt.user },
@@ -81,9 +128,17 @@ export async function generateDetailedMealPlan(
         if (lastRawContent) {
           messages.push({ role: "assistant", content: lastRawContent.slice(0, 4_000) });
         }
+        const blockedFoods = getBlockedFoods(options.profile);
+        const blockedText = blockedFoods.length
+          ? ` Alimentos prohibidos que NO pueden aparecer ni como ingrediente ni como alergeno: ${blockedFoods.join(", ")}.`
+          : "";
+        const allergenErrors = parsed.errors.filter((error) => error.includes("restringido"));
+        const allergenHint = allergenErrors.length
+          ? ` Sustituye las comidas que incumplen (${allergenErrors.slice(0, 3).join("; ")}) por alternativas SIN esos alimentos y devuelve el JSON completo con las comidas corregidas.`
+          : "";
         messages.push({
           role: "user",
-          content: `Tu respuesta anterior no cumplia el formato exigido: ${parsed.errors.slice(0, 5).join("; ")}. Devuelve SOLO el JSON corregido, completo y sin texto adicional.`,
+          content: `Tu respuesta anterior no cumplia el formato exigido: ${parsed.errors.slice(0, 5).join("; ")}. Devuelve SOLO el JSON corregido, completo y sin texto adicional.${blockedText}${allergenHint}`,
         });
       }
 
@@ -113,14 +168,14 @@ export async function generateDetailedMealPlan(
           },
         });
       } catch (error) {
-        return { plan: null, errors: [`No se pudo generar ${day}: ${String(error)}`] };
+        return { day: null, errors: [`No se pudo generar ${day}: ${String(error)}`] };
       }
       activeModel = result.model;
 
       if (!result.response.ok) {
         const errorBody = await result.response.text();
         return {
-          plan: null,
+          day: null,
           errors: [`Modelo ${result.response.status} al generar ${day}: ${errorBody.substring(0, 300)}`],
         };
       }
@@ -129,7 +184,7 @@ export async function generateDetailedMealPlan(
       try {
         streamed = await readStreamedContent(result.response, deadlineAt);
       } catch (error) {
-        return { plan: null, errors: [`No se pudo completar ${day}: ${String(error)}`] };
+        return { day: null, errors: [`No se pudo completar ${day}: ${String(error)}`] };
       }
       lastRawContent = streamed.content;
       if (streamed.finishReason === "length") {
@@ -142,13 +197,36 @@ export async function generateDetailedMealPlan(
 
     if (!parsed.day) {
       return {
-        plan: null,
+        day: null,
         errors: parsed.errors.map((error) => `${day}: ${error}`),
       };
     }
 
-    generatedDays.push(parsed.day);
-    usedMealNames.push(...parsed.day.meals.map((meal: any) => meal.name));
+    return parsed;
+  };
+
+  // Pool de trabajadores: cada uno toma el siguiente dia pendiente hasta
+  // agotar la lista o encontrar un fallo definitivo.
+  const runWorker = async () => {
+    while (!fatalErrors) {
+      const index = nextDayIndex++;
+      if (index >= requestedDays.length) return;
+      const day = requestedDays[index];
+      const parsed = await generateDay(day);
+      if (!parsed.day) {
+        fatalErrors = parsed.errors;
+        return;
+      }
+      generatedDays[index] = parsed.day;
+      usedMealNames.push(...parsed.day.meals.map((meal: any) => meal.name));
+    }
+  };
+  await Promise.all(
+    Array.from({ length: concurrency }, () => runWorker()),
+  );
+
+  if (fatalErrors) {
+    return { plan: null, errors: fatalErrors };
   }
 
   return {
@@ -166,10 +244,11 @@ export async function generateDetailedMealPlan(
   };
 }
 
-function buildDetailedMealDayPrompt(
+export function buildDetailedMealDayPrompt(
   options: GenerateDetailedMealPlanOptions,
   day: string,
   usedMealNames: string[],
+  assignedMeals?: SkeletonMeal[] | null,
 ): { system: string; user: string } {
   const { profile, facts, recentMeals = [], notes } = options;
   const targetKcal = numericTarget(profile?.daily_kcal_target, 2000);
@@ -204,10 +283,19 @@ function buildDetailedMealDayPrompt(
   const usedMealsText = usedMealNames.length
     ? `\n\nPLATOS YA USADOS EN OTROS DIAS (no repetir):\n${usedMealNames.map((name) => `- ${name}`).join("\n")}`
     : "";
+  const assignedMealsText = assignedMeals?.length
+    ? `\n\nPLATOS ASIGNADOS PARA ESTE DIA (desarrollalos con detalle y conserva sus nombres):\n${assignedMeals.map((meal) => `- ${meal.type}: ${meal.name}`).join("\n")}`
+    : "";
+  // Las restricciones alimentarias van tambien al final del prompt: los
+  // modelos atienden mejor a las instrucciones criticas situadas al cierre.
+  const blockedFoods = getBlockedFoods(profile);
+  const blockedFoodsText = blockedFoods.length
+    ? `\n\nRESTRICCIONES ABSOLUTAS (alergias e intolerancias del usuario): NO incluyas NUNCA estos alimentos ni sus derivados: ${blockedFoods.join(", ")}. Revisa cada ingrediente de cada comida antes de responder.`
+    : "";
 
   const system = `Eres NutriCoach, un dietista-nutricionista espanol experto y cocinero didactico. Genera exclusivamente las cuatro comidas de ${day}.
 
-${profileText}${factsText}${mealsText}${notesText}${usedMealsText}
+${profileText}${factsText}${mealsText}${notesText}${usedMealsText}${assignedMealsText}
 
 REGLAS NUTRICIONALES:
 1. Adapta las comidas al perfil, preferencias, habilidad culinaria y presupuesto.
@@ -215,6 +303,7 @@ REGLAS NUTRICIONALES:
 3. Nunca incluyas un alergeno o alimento restringido por el usuario.
 4. Usa ingredientes faciles de encontrar en Espana y cantidades realistas.
 5. Incluye exactamente breakfast, lunch, dinner y snack, sin repetir tipos.
+6. Prioriza la variedad: evita platos o combinaciones casi identicas a las de otros dias de la semana.
 
 DETALLE OBLIGATORIO DE CADA COMIDA:
 1. ingredients incluye TODOS los ingredientes utilizados, incluidos aceite, salsas, especias y guarniciones. Cada uno lleva name, quantity numerica exacta y unit.
@@ -249,9 +338,145 @@ Devuelve exclusivamente un JSON valido, sin markdown ni texto adicional, con est
     }
   ]
 }
-Restricciones del formato: exactamente 4 comidas (una de cada type), minimo 2 ingredientes por comida, entre 4 y 8 pasos por comida, y ninguna propiedad adicional fuera de las indicadas.`;
-  const user = `Genera ${day} con cuatro comidas distintas y recetas de 4 a 8 pasos suficientemente detalladas para una persona sin experiencia.`;
+Restricciones del formato: exactamente 4 comidas (una de cada type), minimo 2 ingredientes por comida, entre 4 y 8 pasos por comida, y ninguna propiedad adicional fuera de las indicadas.${blockedFoodsText}`;
+  const user = assignedMeals?.length
+    ? `Desarrolla las cuatro comidas asignadas de ${day} con recetas de 4 a 8 pasos suficientemente detalladas para una persona sin experiencia: ${assignedMeals.map((meal) => `${meal.type} "${meal.name}"`).join("; ")}.`
+    : `Genera ${day} con cuatro comidas distintas y recetas de 4 a 8 pasos suficientemente detalladas para una persona sin experiencia.`;
   return { system, user };
+}
+
+/** Disena el esqueleto del plan semanal: 28 platos unicos (4 por dia). */
+async function generateWeekSkeleton(
+  options: GenerateDetailedMealPlanOptions,
+  deadlineAt: number,
+): Promise<WeekSkeleton | null> {
+  const profile = options.profile;
+  const targetKcal = numericTarget(profile?.daily_kcal_target, 2000);
+  const targetProtein = numericTarget(profile?.daily_protein_g, 150);
+  const blockedFoods = getBlockedFoods(profile);
+  const factsText = options.facts?.length
+    ? `\nHECHOS DEL USUARIO:\n${options.facts.map((fact: any) => `- [${fact.category}] ${fact.fact}`).join("\n")}`
+    : "";
+  const notesText = options.notes?.trim() ? `\nNOTAS DEL USUARIO: ${options.notes.trim()}` : "";
+  const blockedText = blockedFoods.length
+    ? `\n- NO incluyas NUNCA estos alimentos ni sus derivados: ${blockedFoods.join(", ")}.`
+    : "";
+
+  const system = `Eres un dietista-nutricionista espanol. Disena SOLO los nombres de los platos de una semana completa (lunes a domingo), con 4 comidas por dia: breakfast, lunch, dinner y snack.
+REGLAS:
+1. Ningun plato puede repetirse en toda la semana: 28 nombres distintos, sin variantes casi identicas.
+2. Cocina espanola variada y realista, con ingredientes faciles de encontrar en Espana.
+3. Cada dia debe aproximarse a ${targetKcal} kcal y ${targetProtein} g de proteina en total.
+4. Desayunos y snacks variados entre si (no el mismo esquema todos los dias).${blockedText}${factsText}${notesText}
+
+Devuelve exclusivamente un JSON valido con esta forma exacta, sin texto adicional:
+{"days":[{"day":"lunes","meals":[{"type":"breakfast","name":"..."},{"type":"lunch","name":"..."},{"type":"dinner","name":"..."},{"type":"snack","name":"..."}]},{"day":"martes","meals":[...]}, ... hasta domingo]}`;
+
+  for (let attempt = 0; attempt < SKELETON_MAX_ATTEMPTS; attempt++) {
+    const messages: Array<Record<string, unknown>> = [
+      { role: "system", content: system },
+      { role: "user", content: "Disena el esqueleto semanal completo (7 dias, 28 platos unicos)." },
+    ];
+    if (attempt > 0) {
+      messages.push({
+        role: "user",
+        content: "El esqueleto anterior no era valido: habia platos repetidos o el formato era incorrecto. Devuelve SOLO el JSON corregido con 28 platos unicos.",
+      });
+    }
+
+    let result: Awaited<ReturnType<typeof fetchChatCompletion>>;
+    try {
+      result = await fetchChatCompletion({
+        apiKey: options.apiKey,
+        baseUrl: options.baseUrl,
+        primaryModel: options.primaryModel,
+        fallbackModel: options.fallbackModel,
+        headerTimeoutMs: 20_000,
+        deadlineAt,
+        sessionId: options.sessionId,
+        body: {
+          messages,
+          stream: true,
+          max_completion_tokens: 4096,
+          temperature: 0.6,
+          response_format: { type: "json_object" },
+          reasoning_effort: "minimal",
+        },
+      });
+    } catch (error) {
+      console.warn(`Esqueleto semanal: fallo de red (${String(error)})`);
+      return null;
+    }
+    if (!result.response.ok) {
+      console.warn(`Esqueleto semanal: HTTP ${result.response.status}`);
+      return null;
+    }
+
+    let streamed: { content: string; finishReason: string };
+    try {
+      streamed = await readStreamedContent(result.response, deadlineAt);
+    } catch (error) {
+      console.warn(`Esqueleto semanal: ${String(error)}`);
+      return null;
+    }
+
+    const skeleton = parseSkeleton(streamed.content);
+    if (!skeleton) continue;
+    const errors = validateSkeleton(skeleton, profile);
+    if (errors.length === 0) return skeleton;
+    console.warn(`Esqueleto semanal invalido: ${errors.slice(0, 5).join("; ")}`);
+  }
+  return null;
+}
+
+function parseSkeleton(content: string): WeekSkeleton | null {
+  const json = extractJson(content);
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json);
+    if (!Array.isArray(parsed?.days)) return null;
+    const skeleton: WeekSkeleton = {};
+    for (const dayEntry of parsed.days) {
+      if (!isRecord(dayEntry) || !isNonEmptyString(dayEntry.day)) return null;
+      const dayKey = normalizeDay(dayEntry.day);
+      if (!WEEK_DAYS.includes(dayKey)) continue;
+      if (!Array.isArray(dayEntry.meals) || dayEntry.meals.length !== MEAL_TYPES.length) return null;
+      const meals: SkeletonMeal[] = [];
+      for (const meal of dayEntry.meals) {
+        if (!isRecord(meal) || !MEAL_TYPES.includes(meal.type) || !isNonEmptyString(meal.name)) return null;
+        meals.push({ type: meal.type, name: meal.name.trim() });
+      }
+      skeleton[dayKey] = meals;
+    }
+    if (Object.keys(skeleton).length !== WEEK_DAYS.length) return null;
+    return skeleton;
+  } catch {
+    return null;
+  }
+}
+
+function validateSkeleton(skeleton: WeekSkeleton, profile: any): string[] {
+  const errors: string[] = [];
+  const seen = new Set<string>();
+  const blockedFoods = getBlockedFoods(profile);
+  for (const day of WEEK_DAYS) {
+    const meals = skeleton[day];
+    if (!meals) {
+      errors.push(`falta el dia ${day}`);
+      continue;
+    }
+    for (const meal of meals) {
+      const name = normalizeFood(meal.name);
+      if (seen.has(name)) errors.push(`plato repetido: ${meal.name}`);
+      seen.add(name);
+      for (const blockedFood of blockedFoods) {
+        if (matchesBlockedFood(name, blockedFood)) {
+          errors.push(`plato con alimento restringido '${blockedFood}': ${meal.name}`);
+        }
+      }
+    }
+  }
+  return errors;
 }
 
 function parseAndValidateMealDay(

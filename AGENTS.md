@@ -47,7 +47,8 @@ Reglas específicas de este proyecto. Complementa (no sustituye) el AGENTS.md gl
 
 ### Motor LLM del agente (actualizado 2026-10-07)
 
-- **Texto, visión y planes**: OpenCode Go (`https://opencode.ai/zen/go/v1`) con `deepseek-v4.1-flash`; fallback `glm-5.3-flash`. Requiere `OPENCODE_GO_API_KEY`.
+- **Texto, visión y chat**: OpenCode Go (`https://opencode.ai/zen/go/v1`) con `deepseek-v4.1-flash`; fallback `glm-5.3-flash`. Requiere `OPENCODE_GO_API_KEY`.
+- **Planes de comidas**: `glm-5.3-flash` (medido 2026-10-07: ~18s/día vs ~72s de deepseek; en semanal no cabe con deepseek), fallback `deepseek-v4.1-flash`, generados en paralelo por día. Vars: `OPENCODE_GO_PLAN_MODEL` / `OPENCODE_GO_PLAN_FALLBACK_MODEL`.
 - **Notas de voz**: Gemini 3.5 Flash (`input_audio`). Verificado 2026-10-07: ningún modelo de OpenCode Go acepta audio (el gateway solo admite `text` e `image_url`).
 - **Header obligatorio**: `x-opencode-session` estable por conversación (se envía `conversation_id` en el chat y `plan:{userId}` / `macros:{userId}` en el resto). Sin él, el gateway devuelve 400.
 - **Planes**: DeepSeek no soporta `json_schema` estricto → `json_object` + esquema en el prompt + reintento por día + lectura por streaming.

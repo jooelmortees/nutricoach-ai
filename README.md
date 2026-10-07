@@ -40,7 +40,7 @@ Full technical detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | Storage | Supabase Storage |
 | Realtime | Supabase Realtime v2 |
 | Server logic | Supabase Edge Functions (Deno) |
-| AI | DeepSeek V4.1 Flash via OpenCode Go (OpenAI-compatible endpoint); Gemini 3.5 Flash for voice notes |
+| AI | DeepSeek V4.1 Flash via OpenCode Go (chat/vision, OpenAI-compatible endpoint); GLM-5.3-Flash for meal plans; Gemini 3.5 Flash for voice notes |
 | MCP | Web search + custom MCP servers |
 | CI | GitHub Actions (`macos-15-arm64`), signed builds with Codemagic |
 | Project generation | XcodeGen |

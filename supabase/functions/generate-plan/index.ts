@@ -7,13 +7,14 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 import { generateDetailedMealPlan } from "../_shared/meal-plan.ts";
-import { textProvider } from "../_shared/providers.ts";
+import { planProvider } from "../_shared/providers.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
-const TEXT_PROVIDER = textProvider();
+// Los planes van con el modelo de planes (GLM: 4x mas rapido que deepseek).
+const PLAN_PROVIDER = planProvider();
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "app.nutricoach://",
@@ -67,10 +68,10 @@ serve(async (req) => {
     const recentMeals = await loadRecentMeals(supabaseAdmin, user.id);
 
     const generated = await generateDetailedMealPlan({
-      apiKey: TEXT_PROVIDER.apiKey,
-      baseUrl: TEXT_PROVIDER.baseUrl,
-      primaryModel: TEXT_PROVIDER.primaryModel,
-      fallbackModel: TEXT_PROVIDER.fallbackModel,
+      apiKey: PLAN_PROVIDER.apiKey,
+      baseUrl: PLAN_PROVIDER.baseUrl,
+      primaryModel: PLAN_PROVIDER.primaryModel,
+      fallbackModel: PLAN_PROVIDER.fallbackModel,
       sessionId: `plan:${user.id}`,
       profile,
       facts,
