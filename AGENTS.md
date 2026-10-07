@@ -26,9 +26,9 @@ Reglas específicas de este proyecto. Complementa (no sustituye) el AGENTS.md gl
   - `type` ("weekly"|"daily"), `title`, `summary`, `target_kcal`, `target_protein_g`, `target_carbs_g`, `target_fat_g`
   - `days[]` con `day` (string) y `meals[]`
   - Cada `meal`: `type` (breakfast|lunch|dinner|snack), `name`, `kcal`, `protein_g`, `carbs_g`, `fat_g`, `fiber_g`, `notes`, **`ingredients[]`** (name, quantity, unit), **`preparation_steps[]`** (4-8 pasos detallados), `prep_time_min`, `cook_time_min`, `servings`, `difficulty` (facil|media|alta), `tips`, `allergens[]`.
-- **CRÍTICO - ingredientes y preparación obligatorios**: el generador compartido crea y valida cada día por separado. Gemini debe devolver SIEMPRE `ingredients` y `preparation_steps` en cada comida; un plan incompleto no se guarda. `PlanMeal` mantiene `preparation` opcional solo para decodificar planes antiguos.
+- **CRÍTICO - ingredientes y preparación obligatorios**: el generador compartido crea y valida cada día por separado. El modelo debe devolver SIEMPRE `ingredients` y `preparation_steps` en cada comida; un plan incompleto no se guarda. `PlanMeal` mantiene `preparation` opcional solo para decodificar planes antiguos.
 - **UI**: al pulsar una comida del plan se abre `PlanMealDetailView` (sheet) con ingredientes, preparación, macros, tiempos, dificultad, tips, alérgenos y botón "Registrar como comida de hoy" (inserta en `meals` con `source='ai_suggestion'`).
-- **`PlanMealDifficulty`**: enum con `init(from:)` custom que normaliza tildes y mayúsculas. Si Gemini devuelve "Fácil" o "MEDIA", se mapea correctamente.
+- **`PlanMealDifficulty`**: enum con `init(from:)` custom que normaliza tildes y mayúsculas. Si el modelo devuelve "Fácil" o "MEDIA", se mapea correctamente.
 - **`source` al registrar desde plan**: usar siempre `'ai_suggestion'` (valor válido del enum `meal_source_t`). NUNCA inventar valores de enum.
 
 ### Secrets y configuración
@@ -44,6 +44,14 @@ Reglas específicas de este proyecto. Complementa (no sustituye) el AGENTS.md gl
 - **Tablas importantes**: `profiles`, `memories`, `user_facts`, `messages`, `conversations`, `meals`, `health_metrics`.
 - **RLS activo** en TODAS las tablas. Para tests con `service_role` key.
 - **MCP `supabase` disponible** en este opencode. Usar `supabase_execute_sql` con `project_id=oqkctjzaojyevdxvavaj` para queries.
+
+### Motor LLM del agente (actualizado 2026-10-07)
+
+- **Texto, visión y planes**: OpenCode Go (`https://opencode.ai/zen/go/v1`) con `deepseek-v4.1-flash`; fallback `glm-5.3-flash`. Requiere `OPENCODE_GO_API_KEY`.
+- **Notas de voz**: Gemini 3.5 Flash (`input_audio`). Verificado 2026-10-07: ningún modelo de OpenCode Go acepta audio (el gateway solo admite `text` e `image_url`).
+- **Header obligatorio**: `x-opencode-session` estable por conversación (se envía `conversation_id` en el chat y `plan:{userId}` / `macros:{userId}` en el resto). Sin él, el gateway devuelve 400.
+- **Planes**: DeepSeek no soporta `json_schema` estricto → `json_object` + esquema en el prompt + reintento por día + lectura por streaming.
+- Si falta `OPENCODE_GO_API_KEY`, todo degrada a Gemini automáticamente (`_shared/providers.ts`).
 
 ### Estructura del proyecto
 

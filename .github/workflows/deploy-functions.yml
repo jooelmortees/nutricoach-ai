@@ -63,10 +63,26 @@ jobs:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: supabase functions deploy mcp-router --project-ref "$SUPABASE_PROJECT_REF"
 
+      - name: Deploy generate-plan
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: supabase functions deploy generate-plan --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy recalculate-macros
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: supabase functions deploy recalculate-macros --project-ref "$SUPABASE_PROJECT_REF"
+
       - name: Set Edge Function secrets
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          OPENCODE_GO_BASE_URL: ${{ vars.OPENCODE_GO_BASE_URL || 'https://opencode.ai/zen/go/v1' }}
+          OPENCODE_GO_MODEL: ${{ vars.OPENCODE_GO_MODEL || 'deepseek-v4.1-flash' }}
+          OPENCODE_GO_FALLBACK_MODEL: ${{ vars.OPENCODE_GO_FALLBACK_MODEL || 'glm-5.3-flash' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_BASE_URL: ${{ vars.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.5-flash' }}
@@ -81,6 +97,16 @@ jobs:
             GEMINI_FALLBACK_MODEL="$GEMINI_FALLBACK_MODEL" \
             USDA_FDC_API_KEY="$USDA_FDC_API_KEY" \
             --project-ref "$SUPABASE_PROJECT_REF"
+          if [ -n "$OPENCODE_GO_API_KEY" ]; then
+            supabase secrets set \
+              OPENCODE_GO_API_KEY="$OPENCODE_GO_API_KEY" \
+              OPENCODE_GO_BASE_URL="$OPENCODE_GO_BASE_URL" \
+              OPENCODE_GO_MODEL="$OPENCODE_GO_MODEL" \
+              OPENCODE_GO_FALLBACK_MODEL="$OPENCODE_GO_FALLBACK_MODEL" \
+              --project-ref "$SUPABASE_PROJECT_REF"
+          else
+            echo "OPENCODE_GO_API_KEY no esta en GitHub Secrets: las Edge Functions seguiran usando Gemini."
+          fi
 
       - name: Summary
         run: |

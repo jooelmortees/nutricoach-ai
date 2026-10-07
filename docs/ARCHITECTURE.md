@@ -17,21 +17,23 @@ Supabase (managed)
 ├─ Storage (fotos/vídeos privados con RLS)
 ├─ Realtime v2 (WebSocket para chat streaming)
 └─ Edge Functions (Deno)
-   ├─ chat-proxy   → orquesta Gemini 3.5 Flash con 25+ tools
+   ├─ chat-proxy   → orquesta DeepSeek V4.1 Flash (OpenCode Go) con 25+ tools
    ├─ hk-sync      → recibe HealthKit del iPhone
    └─ mcp-router   → 7 MCPs custom (nutrition, fitness, wearable,
                      memory, recipes, fasting, user-data)
 
-         │ HTTPS (https://generativelanguage.googleapis.com/v1beta/openai)
+         │ HTTPS (https://opencode.ai/zen/go/v1)
          ▼
 
-Gemini 3.5 Flash (tu API key de Google AI Studio)
-├─ Visión nativa (JPEG, PNG, GIF, WEBP ≤ 10MB)
-├─ Vídeo nativo (MP4, AVI, MOV, MKV ≤ 50MB; 512MB vía Files API)
-├─ Thinking (reasoning_effort: minimal/low/medium/high)
+OpenCode Go · DeepSeek V4.1 Flash (suscripción en opencode.ai/console)
+├─ Visión nativa (fotos de comida vía image_url)
+├─ Thinking (delta.reasoning_content)
 ├─ Tool use / Function calling
-├─ Streaming con thinking + text por separado
-└─ Context window: 1.000.000 tokens
+├─ Streaming SSE (thinking + text por separado)
+└─ Fallback a glm-5.3-flash ante errores transitorios
+
+Notas de voz: Gemini 3.5 Flash (input_audio; verificado 2026-10-07:
+ningún modelo de OpenCode Go acepta audio)
 ```
 
 ## Decisiones técnicas clave
@@ -47,12 +49,12 @@ Gemini 3.5 Flash (tu API key de Google AI Studio)
 - Auth + RLS + Storage + Realtime en un solo panel
 - Free tier generoso para empezar
 
-### Por qué Gemini 3.5 Flash
-- Cerebro agentic con visión + vídeo nativos (no necesito CLIP, no necesito GPT-4V)
-- Thinking con reasoning_effort configurable (minimal/low/medium/high)
-- Compatible con endpoint OpenAI (fácil integración, formato estándar)
-- 1M tokens de context (cargo historial completo)
-- API key gratis en Google AI Studio (free tier generoso)
+### Por qué DeepSeek V4.1 Flash (vía OpenCode Go)
+- Modelo open source con visión y tool calling verificados (2026-10-07)
+- Coste fijo: plan OpenCode Go ($10/mes, ~130k requests/mes estimadas para este modelo)
+- Thinking nativo (`reasoning_content`) y streaming compatible con el protocolo SSE existente
+- El gateway exige `x-opencode-session` por conversación; el chat ya tiene `conversation_id`
+- Notas de voz siguen en Gemini porque DeepSeek no acepta `input_audio`
 
 ### Por qué wger + USDA FDC
 - Open source, sin coste por API call, sin riesgo de cierre
@@ -62,7 +64,7 @@ Gemini 3.5 Flash (tu API key de Google AI Studio)
 
 ### Por qué no hay TTS/STT/imagen
 - Coste/beneficio no compensa para esta app
-- Gemini ya ve fotos y vídeos del usuario (no necesita generar)
+- El modelo ya ve fotos de comida del usuario (no necesita generar)
 - Texto es lo más útil + más rápido + más barato
 
 ## Diagrama de datos
@@ -101,15 +103,15 @@ Todas las tablas tienen RLS: cada usuario solo ve/edita sus datos.
    - Carga perfil + hechos activos + últimos 20 mensajes
    - Puede consultar el plan alimentario activo completo o por día mediante `get_active_meal_plan`
    - Construye system prompt (perfil + hechos + instrucciones)
-   - Llama a `POST /v1beta/openai/chat/completions` con `model=gemini-3.5-flash`, tools, reasoning_effort=medium, stream=true
-   - Reintenta errores transitorios con backoff exponencial y usa `gemini-3.1-flash-lite` si 3.5 sigue sin estar disponible
-3. **Gemini**:
-   - Genera thinking (interno, envuelto en tags `<thought>` en delta.content)
+   - Llama a `POST https://opencode.ai/zen/go/v1/chat/completions` con `model=deepseek-v4.1-flash`, tools, `x-opencode-session`, stream=true
+   - Reintenta errores transitorios con backoff exponencial y usa `glm-5.3-flash` si el primario sigue sin estar disponible
+3. **DeepSeek V4.1 Flash**:
+   - Genera thinking (interno, en `delta.reasoning_content`)
    - Decide si llamar a tools
    - Si sí: para, llama a `POST /functions/v1/mcp-router` con `tool` y `arguments`
    - **mcp-router** despacha al MCP correcto (nutrition, fitness, etc.)
    - El MCP lee/escribe en Supabase, devuelve resultado
-   - Gemini integra resultado y sigue razonando
+   - El modelo integra el resultado y sigue razonando
    - Cuando termina, emite `text` final
 4. **chat-proxy** streamea `thinking_delta` y `text_delta` al iOS vía Server-Sent Events
 5. **iOS** renderiza en tiempo real

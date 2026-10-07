@@ -1,9 +1,17 @@
+// ============================================================
+// llm - Cliente LLM compartido (API OpenAI-compatible /chat/completions)
+// Lo usan chat-proxy, generate-plan, recalculate-macros y meal-plan.
+// Proveedor principal: OpenCode Go (DeepSeek V4.1 Flash).
+// ============================================================
+
 const TRANSIENT_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS_PER_MODEL = 2;
 const STREAMING_HEADER_TIMEOUT_MS = 15_000;
 const NON_STREAMING_HEADER_TIMEOUT_MS = 90_000;
+// OpenCode Go pide identificar el cliente con su propio user agent.
+const DEFAULT_USER_AGENT = "nutricoach-ai/1.0 (+https://github.com/jooelmortees/nutricoach-ai)";
 
-interface GeminiChatCompletionOptions {
+export interface ChatCompletionOptions {
   apiKey: string;
   baseUrl: string;
   primaryModel: string;
@@ -11,17 +19,21 @@ interface GeminiChatCompletionOptions {
   preferredModel?: string;
   headerTimeoutMs?: number;
   deadlineAt?: number;
+  /** Identificador estable de conversacion. OpenCode Go lo exige (x-opencode-session). */
+  sessionId?: string;
+  /** Cabeceras adicionales para el proveedor. */
+  headers?: Record<string, string>;
   body: Record<string, unknown>;
 }
 
-interface GeminiChatCompletionResult {
+export interface ChatCompletionResult {
   response: Response;
   model: string;
 }
 
-export async function fetchGeminiChatCompletion(
-  options: GeminiChatCompletionOptions,
-): Promise<GeminiChatCompletionResult> {
+export async function fetchChatCompletion(
+  options: ChatCompletionOptions,
+): Promise<ChatCompletionResult> {
   const initialModel = options.preferredModel ?? options.primaryModel;
   const models = [initialModel];
   if (
@@ -30,6 +42,14 @@ export async function fetchGeminiChatCompletion(
   ) {
     models.push(options.fallbackModel);
   }
+
+  const requestHeaders: Record<string, string> = {
+    "Authorization": `Bearer ${options.apiKey}`,
+    "Content-Type": "application/json",
+    "User-Agent": DEFAULT_USER_AGENT,
+    ...(options.sessionId ? { "x-opencode-session": options.sessionId } : {}),
+    ...options.headers,
+  };
 
   let lastError: unknown;
 
@@ -47,17 +67,14 @@ export async function fetchGeminiChatCompletion(
           ? configuredTimeoutMs
           : options.deadlineAt - Date.now();
         if (remainingMs <= 0) {
-          throw new Error("Se agoto el tiempo disponible para Gemini");
+          throw new Error("Se agoto el tiempo disponible para el modelo");
         }
         const headerTimeoutMs = Math.min(configuredTimeoutMs, remainingMs);
         const response = await fetchWithHeaderTimeout(
           `${options.baseUrl}/chat/completions`,
           {
             method: "POST",
-            headers: {
-              "Authorization": `Bearer ${options.apiKey}`,
-              "Content-Type": "application/json",
-            },
+            headers: requestHeaders,
             body: JSON.stringify({ ...options.body, model }),
           },
           headerTimeoutMs,
@@ -77,7 +94,7 @@ export async function fetchGeminiChatCompletion(
 
         const delayMs = hasRetry ? getRetryDelayMs(response, attempt) : 0;
         console.warn(
-          `Gemini ${model} devolvio ${response.status}. ` +
+          `Modelo ${model} devolvio ${response.status}. ` +
             (hasRetry
               ? `Reintento ${attempt + 2}/${MAX_ATTEMPTS_PER_MODEL} en ${delayMs} ms.`
               : `Usando fallback ${models[modelIndex + 1]}.`),
@@ -93,7 +110,7 @@ export async function fetchGeminiChatCompletion(
 
         const delayMs = hasRetry ? getRetryDelayMs(null, attempt) : 0;
         console.warn(
-          `Gemini ${model} fallo antes de responder: ${String(error)}. ` +
+          `Modelo ${model} fallo antes de responder: ${String(error)}. ` +
             (hasRetry
               ? `Reintento ${attempt + 2}/${MAX_ATTEMPTS_PER_MODEL} en ${delayMs} ms.`
               : `Usando fallback ${models[modelIndex + 1]}.`),
@@ -103,7 +120,7 @@ export async function fetchGeminiChatCompletion(
     }
   }
 
-  throw lastError ?? new Error("Gemini no devolvio respuesta");
+  throw lastError ?? new Error("El modelo no devolvio respuesta");
 }
 
 async function fetchWithHeaderTimeout(

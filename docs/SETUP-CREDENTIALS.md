@@ -6,10 +6,11 @@
 
 | Credencial | Dónde meterla |
 |---|---|
+| `OPENCODE_GO_API_KEY` | `.env` local + GitHub Secret + Supabase secret (motor principal) |
 | `SUPABASE_URL` | `.env` local + GitHub Secret `SUPABASE_URL` |
 | `SUPABASE_ANON_KEY` | `.env` local + GitHub Secret `SUPABASE_ANON_KEY` + Info.plist de iOS (build) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Solo GitHub Secret `SUPABASE_SERVICE_ROLE_KEY` (NUNCA en cliente) |
-| `GEMINI_API_KEY` | Solo GitHub Secret `GEMINI_API_KEY` (NUNCA en cliente) |
+| `GEMINI_API_KEY` | Solo GitHub Secret `GEMINI_API_KEY` (solo notas de voz; NUNCA en cliente) |
 | Certificado y perfiles Apple | Codemagic Code signing identities |
 | `SUPABASE_ACCESS_TOKEN` | Solo local (para `supabase` CLI) |
 | `SUPABASE_PROJECT_REF` | Solo local (para `supabase` CLI) |
@@ -32,6 +33,7 @@ Pulsa "New repository secret" para cada uno:
 
 | Secret | Ejemplo |
 |---|---|
+| `OPENCODE_GO_API_KEY` | `sk-...` (suscripción OpenCode Go; motor principal del agente) |
 | `SUPABASE_URL` | `https://abcdefgh.supabase.co` |
 | `SUPABASE_ANON_KEY` | `eyJ...` |
 | `SUPABASE_SERVICE_ROLE_KEY` | `eyJ...` (MUY sensible) |

@@ -1,19 +1,19 @@
 // ============================================================
 // generate-plan - Edge Function de Supabase
-// Genera un plan de dieta semanal o diario con Gemini y lo guarda en meal_plans.
+// Genera un plan de dieta semanal o diario con el motor LLM
+// configurado (OpenCode Go / DeepSeek V4.1 Flash) y lo guarda en meal_plans.
 // ============================================================
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
 import { generateDetailedMealPlan } from "../_shared/meal-plan.ts";
+import { textProvider } from "../_shared/providers.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
-const GEMINI_BASE_URL = Deno.env.get("GEMINI_BASE_URL") ?? "https://generativelanguage.googleapis.com/v1beta/openai";
-const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash";
-const GEMINI_FALLBACK_MODEL = Deno.env.get("GEMINI_FALLBACK_MODEL") ?? "gemini-3.1-flash-lite";
+
+const TEXT_PROVIDER = textProvider();
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "app.nutricoach://",
@@ -67,10 +67,11 @@ serve(async (req) => {
     const recentMeals = await loadRecentMeals(supabaseAdmin, user.id);
 
     const generated = await generateDetailedMealPlan({
-      apiKey: GEMINI_API_KEY,
-      baseUrl: GEMINI_BASE_URL,
-      primaryModel: GEMINI_MODEL,
-      fallbackModel: GEMINI_FALLBACK_MODEL,
+      apiKey: TEXT_PROVIDER.apiKey,
+      baseUrl: TEXT_PROVIDER.baseUrl,
+      primaryModel: TEXT_PROVIDER.primaryModel,
+      fallbackModel: TEXT_PROVIDER.fallbackModel,
+      sessionId: `plan:${user.id}`,
       profile,
       facts,
       recentMeals,

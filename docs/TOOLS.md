@@ -16,7 +16,7 @@
 | `search_memories` | memory | 4 |
 | `search_food` | nutrition | 3 |
 | `get_food_details` | nutrition | 3 |
-| `analyze_meal_photo` | nutrition | 2 (usa Gemini vision directo en chat-proxy) |
+| `analyze_meal_photo` | nutrition | 2 (usa la visión del modelo en chat-proxy) |
 | `analyze_meal_video` | nutrition | 5 |
 | `analyze_meal_text` | nutrition | 1 |
 | `log_meal` | nutrition | 2 |
@@ -85,7 +85,7 @@ El loop del agente (en `chat-proxy`) es:
 
 ```ts
 let response = await anthropic.messages.create({
-  model: "gemini-3.5-flash",
+  model: "deepseek-v4.1-flash",
   messages, tools, reasoning_effort: "medium"
 })
 
@@ -99,4 +99,4 @@ while (response.stop_reason === "tool_use") {
 }
 ```
 
-Importante: **preservar TODOS los content blocks** (thinking + text + tool_use) al añadir al historial. Si se pierde el thinking, Gemini pierde la cadena de razonamiento.
+Importante: **preservar TODOS los content blocks** (thinking + text + tool_use) al añadir al historial. Si se pierde el thinking, el modelo pierde la cadena de razonamiento.

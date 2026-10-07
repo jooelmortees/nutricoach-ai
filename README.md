@@ -1,6 +1,6 @@
 # NutriCoach AI
 
-A native iOS app with an AI dietitian-nutritionist agent powered by **Gemini 3.5 Flash** — connected to Apple HealthKit, with persistent memory, on-device meal photo analysis, and specialised MCP servers for nutrition, fitness and health.
+A native iOS app with an AI dietitian-nutritionist agent powered by **DeepSeek V4.1 Flash via OpenCode Go** — connected to Apple HealthKit, with persistent memory, on-device meal photo analysis, and specialised MCP servers for nutrition, fitness and health.
 
 > 🍎 Currently in active development — App Store release coming soon.
 
@@ -22,7 +22,7 @@ iPhone (SwiftUI)
    ↓ Supabase Swift SDK
 Supabase (Postgres + pgvector + Auth + Storage + Edge Functions)
    ↓ HTTPS (secure proxy)
-Gemini 3.5 Flash (AI brain: vision, tool use, reasoning)
+OpenCode Go / DeepSeek V4.1 Flash (AI brain: vision, tool use, reasoning)
    ↓ MCP
 Specialised MCPs (web search + custom: nutrition, fitness, wearable, memory, recipes, fasting, user data)
 ```
@@ -40,7 +40,7 @@ Full technical detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | Storage | Supabase Storage |
 | Realtime | Supabase Realtime v2 |
 | Server logic | Supabase Edge Functions (Deno) |
-| AI | Gemini 3.5 Flash (OpenAI-compatible endpoint) |
+| AI | DeepSeek V4.1 Flash via OpenCode Go (OpenAI-compatible endpoint); Gemini 3.5 Flash for voice notes |
 | MCP | Web search + custom MCP servers |
 | CI | GitHub Actions (`macos-15-arm64`), signed builds with Codemagic |
 | Project generation | XcodeGen |
@@ -63,7 +63,7 @@ nutricoach-ai/
 
 ## Getting started
 
-> You need a Mac with Xcode for iOS development, a Supabase project and a Gemini API key.
+> You need a Mac with Xcode for iOS development, a Supabase project, an OpenCode Go subscription and a Gemini API key (voice notes).
 
 ### 1. Clone and configure
 

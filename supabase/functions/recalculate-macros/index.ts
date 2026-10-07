@@ -1,21 +1,20 @@
 // ============================================================
 // recalculate-macros - Edge Function
-// Recibe ingredientes editados por el usuario y pide a Gemini 3.5 Flash
-// que calcule los macros (kcal, protein, carbs, fat) y devuelva
-// un JSON estructurado.
+// Recibe ingredientes editados por el usuario y pide al modelo
+// configurado (OpenCode Go / DeepSeek V4.1 Flash) que calcule los
+// macros (kcal, protein, carbs, fat) y devuelva un JSON estructurado.
 // ============================================================
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
-import { fetchGeminiChatCompletion } from "../_shared/gemini.ts";
+import { fetchChatCompletion } from "../_shared/llm.ts";
+import { textProvider } from "../_shared/providers.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
-const GEMINI_BASE_URL = Deno.env.get("GEMINI_BASE_URL") ?? "https://generativelanguage.googleapis.com/v1beta/openai";
-const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash";
-const GEMINI_FALLBACK_MODEL = Deno.env.get("GEMINI_FALLBACK_MODEL") ?? "gemini-3.1-flash-lite";
+
+const TEXT_PROVIDER = textProvider();
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "app.nutricoach://",
@@ -62,7 +61,7 @@ serve(async (req) => {
       return jsonError(400, "ingredients array required");
     }
 
-    // Construir prompt para Gemini
+    // Construir prompt para el modelo
     const ingredientsText = body.ingredients
       .map(i => `- ${i.name}: ${i.quantity} ${i.unit}`)
       .join("\n");
@@ -83,12 +82,13 @@ Reglas:
 
     const userPrompt = `Comida: ${body.name}\nIngredientes:\n${ingredientsText}\n\nCalcula los macros totales y responde SOLO con el JSON.`;
 
-    // Llamar a Gemini
-    const { response } = await fetchGeminiChatCompletion({
-      apiKey: GEMINI_API_KEY,
-      baseUrl: GEMINI_BASE_URL,
-      primaryModel: GEMINI_MODEL,
-      fallbackModel: GEMINI_FALLBACK_MODEL,
+    // Llamar al modelo configurado
+    const { response } = await fetchChatCompletion({
+      apiKey: TEXT_PROVIDER.apiKey,
+      baseUrl: TEXT_PROVIDER.baseUrl,
+      primaryModel: TEXT_PROVIDER.primaryModel,
+      fallbackModel: TEXT_PROVIDER.fallbackModel,
+      sessionId: `macros:${user.id}`,
       body: {
         messages: [
           { role: "system", content: systemPrompt },
@@ -96,10 +96,9 @@ Reglas:
         ],
         temperature: 0.3,
         max_completion_tokens: 500,
-        // CRITICO: reasoning_effort minimal para que response_format produzca
-        // JSON puro. Con reasoning_effort medium/high, Gemini emite bloques
-        // de razonamiento dentro de content y corrompe el JSON.
-        // Verificado empiricamente 2026-07-07.
+        // CRITICO con Gemini: reasoning_effort minimal para que response_format
+        // produzca JSON puro (con medium/high emite razonamiento dentro de
+        // content y corrompe el JSON). Verificado empiricamente 2026-07-07.
         response_format: { type: "json_object" },
         reasoning_effort: "minimal",
       },
@@ -107,7 +106,7 @@ Reglas:
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error("Gemini error:", response.status, errText);
+      console.error("Modelo error:", response.status, errText);
       return jsonError(500, `Error del modelo: ${response.status}`);
     }
 

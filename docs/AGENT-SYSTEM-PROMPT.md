@@ -1,6 +1,6 @@
 # System Prompt del Agente — NutriCoach
 
-> Este archivo se carga en la Edge Function `chat-proxy` y se envía como `system` en cada llamada a Gemini 3.5 Flash.
+> Este archivo se carga en la Edge Function `chat-proxy` y se envía como `system` en cada llamada al modelo (DeepSeek V4.1 Flash vía OpenCode Go).
 > Iteraré contigo en cada sprint para refinarlo.
 
 ## Versión actual (fase 0)
@@ -76,7 +76,7 @@ const systemPrompt = `
 `;
 ```
 
-El bloque fijo se beneficia del implicit caching de Gemini (auto desde 4096 tokens de prefijo).
+El bloque fijo se beneficia del prompt caching del proveedor (tokens de prefijo cacheados).
 
 ## Pendiente para fase 1
 

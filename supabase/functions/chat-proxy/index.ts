@@ -1,21 +1,24 @@
 // ============================================================
 // chat-proxy - Edge Function de Supabase
-// Proxy seguro al agente Gemini 3.5 Flash con loop agentico (tool use).
+// Proxy seguro al agente NutriCoach con loop agentico (tool use).
+// Motor principal: OpenCode Go (DeepSeek V4.1 Flash); Gemini solo para audio.
 // Streaming SSE hacia el cliente iOS.
 // ============================================================
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7";
-import { fetchGeminiChatCompletion } from "../_shared/gemini.ts";
+import { fetchChatCompletion } from "../_shared/llm.ts";
+import { geminiConfig, textProvider } from "../_shared/providers.ts";
 import { generateDetailedMealPlan } from "../_shared/meal-plan.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
-const GEMINI_BASE_URL = Deno.env.get("GEMINI_BASE_URL") ?? "https://generativelanguage.googleapis.com/v1beta/openai";
-const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash";
-const GEMINI_FALLBACK_MODEL = Deno.env.get("GEMINI_FALLBACK_MODEL") ?? "gemini-3.1-flash-lite";
+
+// Motor de texto, vision y planes. Si OPENCODE_GO_API_KEY no esta
+// configurada, textProvider() degrada a Gemini automaticamente.
+const TEXT_PROVIDER = textProvider();
+console.log(`chat-proxy LLM: ${TEXT_PROVIDER.label}/${TEXT_PROVIDER.primaryModel}`);
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "app.nutricoach://",
@@ -186,13 +189,15 @@ serve(async (req) => {
         image_url: { url: imageUrl },
       });
     }
-    // Audio: inline_data como input_audio (formato OpenAI-compatible soportado por Gemini).
-    // El cliente envía WAV (PCM 16-bit) en base64 con mime_type "audio/wav".
+    // Audio: input_audio (formato OpenAI-compatible). Solo lo procesa Gemini:
+    // verificado empiricamente 2026-10-07, ningun modelo de OpenCode Go acepta
+    // audio (el gateway solo admite text e image_url). El cliente envia WAV
+    // (PCM 16-bit) en base64 con mime_type "audio/wav".
     // NOTA: Verificado empiricamente 2026-07-08: Gemini 3.5 Flash NO procesa
     // audio en modo streaming (stream:true). El audio llega pero Gemini
     // responde "no he podido escuchar el audio". Sin streaming (stream:false)
     // el audio SÍ se procesa (confirmado con promptTokensDetails AUDIO=25).
-    // Solucion: cuando hay audio, hacemos la llamada sin streaming y emitimos
+    // Solucion: cuando hay audio, la llamada va sin streaming y emitimos
     // la respuesta completa como eventos SSE al cliente.
     const hasAudio = preparedAttachments.audioBase64.length > 0;
     for (const audioBase64 of preparedAttachments.audioBase64) {
@@ -230,7 +235,7 @@ serve(async (req) => {
       body.web_search === true || tool.function.name !== "web_search"
     );
 
-    // 11. Loop agentico: Gemini puede llamar tools, ejecutamos, volvemos a llamar
+    // 11. Loop agentico: el modelo puede llamar tools, ejecutamos, volvemos a llamar
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
@@ -238,42 +243,43 @@ serve(async (req) => {
         let detectedMacros: any = null;
         let savedMealFlag = false;
         let assistantMessageSaved = false;
-        let activeModel = GEMINI_MODEL;
+        let activeModel = TEXT_PROVIDER.primaryModel;
 
         try {
           for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration++) {
-            // Hacer request a Gemini.
-            // NOTA: cuando hay audio (hasAudio && iteration === 0), usamos
-            // stream: false porque Gemini 3.5 Flash NO procesa audio en
-            // modo streaming (verificado empiricamente 2026-07-08: el audio
-            // llega pero Gemini responde "no he podido escuchar el audio"
-            // con stream:true, mientras que con stream:false el audio se
-            // procesa correctamente con promptTokensDetails AUDIO=25).
+            // Proveedor de este turno: con audio solo Gemini (input_audio);
+            // el resto de casos va al motor principal (OpenCode Go).
+            // NOTA: cuando hay audio usamos stream: false porque Gemini 3.5
+            // Flash NO procesa audio en modo streaming (verificado 2026-07-08:
+            // con stream:true responde "no he podido escuchar el audio";
+            // con stream:false lo procesa con promptTokensDetails AUDIO=25).
+            const provider = hasAudio ? geminiConfig() : TEXT_PROVIDER;
             const useStreaming = !hasAudio;
-            const geminiResult = await fetchGeminiChatCompletion({
-              apiKey: GEMINI_API_KEY,
-              baseUrl: GEMINI_BASE_URL,
-              primaryModel: GEMINI_MODEL,
-              fallbackModel: GEMINI_FALLBACK_MODEL,
-              preferredModel: activeModel,
+            const llmResult = await fetchChatCompletion({
+              apiKey: provider.apiKey,
+              baseUrl: provider.baseUrl,
+              primaryModel: provider.primaryModel,
+              fallbackModel: provider.fallbackModel,
+              preferredModel: hasAudio ? undefined : activeModel,
+              // OpenCode Go exige un identificador estable por conversacion.
+              sessionId: body.conversation_id,
               body: {
                 messages: apiMessages,
                 tools,
                 stream: useStreaming,
                 max_completion_tokens: 16384,
                 reasoning_effort: "medium",
-                // IMPORTANTE: Gemini 3.5 Flash emite el thinking en delta.content
-                // envuelto en tags <thought>...</thought> con un marcador
-                // extra_content.google.thought = true en cada chunk de thinking.
-                // El parser en backend separa los bloques <thought> del content.
+                // Thinking: DeepSeek lo emite como delta.reasoning_content;
+                // Gemini lo emite en delta.content envuelto en <thought>...</thought>.
+                // El parser de streaming de abajo soporta ambos formatos.
               },
             });
-            const upstreamResp = geminiResult.response;
-            activeModel = geminiResult.model;
+            const upstreamResp = llmResult.response;
+            if (!hasAudio) activeModel = llmResult.model;
 
             if (!upstreamResp.ok) {
               const errText = await upstreamResp.text();
-              controller.enqueue(encoder.encode(sseEvent("error", { message: `Gemini error ${upstreamResp.status}: ${errText}` })));
+              controller.enqueue(encoder.encode(sseEvent("error", { message: `${provider.label} error ${upstreamResp.status}: ${errText}` })));
               return;
             }
 
@@ -282,7 +288,7 @@ serve(async (req) => {
               const data = await upstreamResp.json();
               const choice = data.choices?.[0];
               if (!choice) {
-                controller.enqueue(encoder.encode(sseEvent("error", { message: "Gemini: respuesta vacia" })));
+                controller.enqueue(encoder.encode(sseEvent("error", { message: `${provider.label}: respuesta vacia` })));
                 return;
               }
               const message = choice.message;
@@ -383,7 +389,7 @@ serve(async (req) => {
               continue;
             }
 
-            // Parsear el stream de Gemini
+            // Parsear el stream del proveedor
             const reader = upstreamResp.body!.getReader();
             const decoder = new TextDecoder();
             let buffer = "";
@@ -416,20 +422,15 @@ serve(async (req) => {
                   finishReason = choice.finish_reason || finishReason;
                   const delta = choice.delta;
 
-                  // 1. reasoning_content (algunos servers lo usan; Gemini no,
-                  //    pero lo dejamos por compatibilidad futura)
+                  // 1. reasoning_content: DeepSeek (OpenCode Go) emite aqui el thinking
                   if (delta?.reasoning_content) {
                     iterThinking += delta.reasoning_content;
                     controller.enqueue(encoder.encode(sseEvent("thinking", { text: delta.reasoning_content })));
                   }
 
-                  // 2. content: parsear streaming de <thought>...</thought>
-                  //    Gemini 3.5 Flash con reasoning_effort emite el thinking
-                  //    en delta.content envuelto en tags <thought>...</thought>
-                  //    con un marcador extra_content.google.thought = true en
-                  //    cada chunk de thinking. Necesitamos separar en streaming
-                  //    porque el cliente espera eventos thinking y text por
-                  //    separado.
+                  // 2. content: con Gemini, thinking envuelto en <thought>...</thought>;
+                  //    con DeepSeek, texto normal (el thinking va por reasoning_content).
+                  //    El cliente espera eventos thinking y text por separado.
                   if (delta?.content) {
                     rawContent += delta.content;
                     // Aplicar regex para extraer bloque <thought> cerrado
@@ -469,8 +470,8 @@ serve(async (req) => {
 
                   // 3. tool_calls (function calling)
                   //    Gemini anade extra_content.google.thought_signature a cada
-                  //    tool_call. Es OBLIGATORIO reenviarlo en el assistant message
-                  //    del historial para la siguiente iteracion (si no, error 400).
+                  //    tool_call y es obligatorio reenviarlo en la siguiente
+                  //    iteracion (si no, error 400). DeepSeek no lo usa.
                   if (delta?.tool_calls) {
                     for (const tc of delta.tool_calls) {
                       const idx = tc.index ?? toolCalls.length;
@@ -498,9 +499,9 @@ serve(async (req) => {
 
             // Si no hay tool_calls, terminamos el loop
             // NOTA: Gemini en streaming puede emitir finish_reason "stop" incluso
-            // cuando hay tool_calls acumulados (verificado empiricamente 2026-07-08).
-            // Por eso comprobamos toolCalls.length primero: si hay tools, las
-            // ejecutamos sin importar el finishReason.
+            // cuando hay tool_calls acumulados (verificado empiricamente 2026-07-08);
+            // DeepSeek emite "tool_calls". Por eso comprobamos toolCalls.length
+            // primero: si hay tools, las ejecutamos sin importar el finishReason.
             if (toolCalls.length === 0) {
               if (!assistantMessageSaved && (fullText || iterThinking)) {
                 await saveAssistantMessage(
@@ -515,15 +516,15 @@ serve(async (req) => {
               break;
             }
 
-            // Hay tool_calls: ejecutar y volver a llamar a Gemini
+            // Hay tool_calls: ejecutar y volver a llamar al modelo
             // Emitir evento tools_start con nombres legibles de las tools
             const toolNames = toolCalls.map(t => t.function.name);
             controller.enqueue(encoder.encode(sseEvent("tools_start", { names: toolNames })));
 
             // Anadir el assistant message con tool_calls al historial
-            // CRITICO: incluir thought_signature en cada tool_call. Gemini lo
-            // exige para la siguiente iteracion del loop (si no, error 400:
-            // "Function call is missing a thought_signature").
+            // CRITICO con Gemini: incluir thought_signature en cada tool_call
+            // (si no, error 400 "Function call is missing a thought_signature").
+            // DeepSeek no lo usa; se envia solo si existe.
             apiMessages.push({
               role: "assistant",
               content: iterText || null,
@@ -1087,7 +1088,7 @@ async function saveMeal(supabase: any, userId: string, analysis: any) {
 // ============================================================
 
 interface ToolResult {
-  content: string;       // Texto que se envia a Gemini como tool_result
+  content: string;       // Texto que se envia al modelo como tool_result
   summary: string;       // Resumen para emitir al cliente via SSE
 }
 
@@ -1482,10 +1483,11 @@ async function executeTool(
         }
 
         const generated = await generateDetailedMealPlan({
-          apiKey: GEMINI_API_KEY,
-          baseUrl: GEMINI_BASE_URL,
-          primaryModel: GEMINI_MODEL,
-          fallbackModel: GEMINI_FALLBACK_MODEL,
+          apiKey: TEXT_PROVIDER.apiKey,
+          baseUrl: TEXT_PROVIDER.baseUrl,
+          primaryModel: TEXT_PROVIDER.primaryModel,
+          fallbackModel: TEXT_PROVIDER.fallbackModel,
+          sessionId: `plan:${userId}`,
           profile,
           facts,
           recentMeals: recentMeals ?? [],

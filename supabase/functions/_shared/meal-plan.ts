@@ -1,4 +1,4 @@
-import { fetchGeminiChatCompletion } from "./gemini.ts";
+import { fetchChatCompletion } from "./llm.ts";
 
 export type MealPlanType = "weekly" | "daily";
 
@@ -7,6 +7,8 @@ interface GenerateDetailedMealPlanOptions {
   baseUrl: string;
   primaryModel: string;
   fallbackModel: string;
+  /** Identificador de sesion para el proveedor (x-opencode-session). */
+  sessionId?: string;
   profile: any;
   facts: any[];
   recentMeals?: any[];
@@ -35,6 +37,7 @@ const WEEK_DAYS = [
 ];
 const MEAL_TYPES = ["breakfast", "lunch", "dinner", "snack"];
 const PLAN_GENERATION_BUDGET_MS = 125_000;
+const MEAL_DAY_MAX_ATTEMPTS = 2;
 const ALLERGEN_ALIASES: Record<string, string[]> = {
   gluten: ["trigo", "cebada", "centeno", "pan", "pasta", "harina", "cuscus", "tortilla de trigo"],
   leche: ["leche", "lactosa", "queso", "yogur", "mantequilla", "nata", "suero", "whey"],
@@ -63,56 +66,80 @@ export async function generateDetailedMealPlan(
 
   for (const day of requestedDays) {
     const prompt = buildDetailedMealDayPrompt(promptOptions, day, usedMealNames);
-    let result: Awaited<ReturnType<typeof fetchGeminiChatCompletion>>;
-    try {
-      result = await fetchGeminiChatCompletion({
-        apiKey: options.apiKey,
-        baseUrl: options.baseUrl,
-        primaryModel: options.primaryModel,
-        fallbackModel: options.fallbackModel,
-        preferredModel: activeModel,
-        headerTimeoutMs: 30_000,
-        deadlineAt,
-        body: {
-          messages: [
-            { role: "system", content: prompt.system },
-            { role: "user", content: prompt.user },
-          ],
-          stream: false,
-          max_completion_tokens: 8192,
-          temperature: 0.4,
-          response_format: mealDayResponseFormat(day),
-          reasoning_effort: "minimal",
-        },
-      });
-    } catch (error) {
-      return { plan: null, errors: [`No se pudo generar ${day}: ${String(error)}`] };
-    }
-    activeModel = result.model;
+    let parsed: ParsedMealDay = { day: null, errors: [] };
+    let lastRawContent = "";
 
-    if (!result.response.ok) {
-      const errorBody = await result.response.text();
-      return {
-        plan: null,
-        errors: [`Gemini ${result.response.status} al generar ${day}: ${errorBody.substring(0, 300)}`],
-      };
+    // Reintento por dia: DeepSeek no soporta json_schema estricto
+    // (verificado empiricamente 2026-10-07), asi que si el JSON no valida
+    // se reintenta una vez indicando al modelo los errores concretos.
+    for (let attempt = 0; attempt < MEAL_DAY_MAX_ATTEMPTS; attempt++) {
+      const messages: Array<Record<string, unknown>> = [
+        { role: "system", content: prompt.system },
+        { role: "user", content: prompt.user },
+      ];
+      if (attempt > 0) {
+        if (lastRawContent) {
+          messages.push({ role: "assistant", content: lastRawContent.slice(0, 4_000) });
+        }
+        messages.push({
+          role: "user",
+          content: `Tu respuesta anterior no cumplia el formato exigido: ${parsed.errors.slice(0, 5).join("; ")}. Devuelve SOLO el JSON corregido, completo y sin texto adicional.`,
+        });
+      }
+
+      let result: Awaited<ReturnType<typeof fetchChatCompletion>>;
+      try {
+        result = await fetchChatCompletion({
+          apiKey: options.apiKey,
+          baseUrl: options.baseUrl,
+          primaryModel: options.primaryModel,
+          fallbackModel: options.fallbackModel,
+          preferredModel: activeModel,
+          headerTimeoutMs: 20_000,
+          deadlineAt,
+          sessionId: options.sessionId,
+          // Streaming: el plan genera respuestas largas y con stream:false
+          // el primer byte puede tardar mas de lo que permite el timeout
+          // de cabeceras (verificado empiricamente 2026-10-07).
+          body: {
+            messages,
+            stream: true,
+            // 16384: el razonamiento de DeepSeek consume parte del presupuesto
+            // de completion y con 8192 el JSON del dia se truncaba (2026-10-07).
+            max_completion_tokens: 16384,
+            temperature: 0.4,
+            response_format: { type: "json_object" },
+            reasoning_effort: "minimal",
+          },
+        });
+      } catch (error) {
+        return { plan: null, errors: [`No se pudo generar ${day}: ${String(error)}`] };
+      }
+      activeModel = result.model;
+
+      if (!result.response.ok) {
+        const errorBody = await result.response.text();
+        return {
+          plan: null,
+          errors: [`Modelo ${result.response.status} al generar ${day}: ${errorBody.substring(0, 300)}`],
+        };
+      }
+
+      let streamed: { content: string; finishReason: string };
+      try {
+        streamed = await readStreamedContent(result.response, deadlineAt);
+      } catch (error) {
+        return { plan: null, errors: [`No se pudo completar ${day}: ${String(error)}`] };
+      }
+      lastRawContent = streamed.content;
+      if (streamed.finishReason === "length") {
+        parsed = { day: null, errors: ["La respuesta se truncó por limite de tokens"] };
+        continue;
+      }
+      parsed = parseAndValidateMealDay(lastRawContent, day, options.profile);
+      if (parsed.day) break;
     }
 
-    let geminiData: any;
-    try {
-      geminiData = await readJsonBeforeDeadline(result.response, deadlineAt);
-    } catch (error) {
-      return { plan: null, errors: [`No se pudo completar ${day}: ${String(error)}`] };
-    }
-    const choice = geminiData.choices?.[0];
-    if (choice?.finish_reason === "length") {
-      return { plan: null, errors: [`Gemini trunco la receta de ${day}`] };
-    }
-    const parsed = parseAndValidateMealDay(
-      choice?.message?.content ?? "",
-      day,
-      options.profile,
-    );
     if (!parsed.day) {
       return {
         plan: null,
@@ -198,89 +225,33 @@ DETALLE OBLIGATORIO DE CADA COMIDA:
 6. Incluso un desayuno o snack sin coccion debe explicar montaje, orden, textura y servicio en al menos 4 pasos.
 7. Los tiempos y raciones deben concordar con la receta. allergens lleva solo alergenos presentes.
 
-Devuelve exclusivamente el JSON exigido por el schema.`;
+Devuelve exclusivamente un JSON valido, sin markdown ni texto adicional, con esta forma exacta:
+{
+  "day": "${day}",
+  "meals": [
+    {
+      "type": "breakfast | lunch | dinner | snack",
+      "name": "string",
+      "kcal": numero,
+      "protein_g": numero,
+      "carbs_g": numero,
+      "fat_g": numero,
+      "fiber_g": numero,
+      "notes": "string",
+      "ingredients": [{ "name": "string", "quantity": numero mayor que 0, "unit": "string" }],
+      "preparation_steps": ["paso detallado de al menos 20 caracteres", "..."],
+      "prep_time_min": entero,
+      "cook_time_min": entero,
+      "servings": entero mayor o igual que 1,
+      "difficulty": "facil | media | alta",
+      "tips": "string",
+      "allergens": ["string"]
+    }
+  ]
+}
+Restricciones del formato: exactamente 4 comidas (una de cada type), minimo 2 ingredientes por comida, entre 4 y 8 pasos por comida, y ninguna propiedad adicional fuera de las indicadas.`;
   const user = `Genera ${day} con cuatro comidas distintas y recetas de 4 a 8 pasos suficientemente detalladas para una persona sin experiencia.`;
   return { system, user };
-}
-
-function mealDayResponseFormat(day: string): Record<string, unknown> {
-  const ingredientSchema = {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      name: { type: "string", minLength: 1 },
-      quantity: { type: "number", exclusiveMinimum: 0 },
-      unit: { type: "string", minLength: 1 },
-    },
-    required: ["name", "quantity", "unit"],
-  };
-  const mealSchema = {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      type: { type: "string", enum: MEAL_TYPES },
-      name: { type: "string", minLength: 1 },
-      kcal: { type: "number", minimum: 0 },
-      protein_g: { type: "number", minimum: 0 },
-      carbs_g: { type: "number", minimum: 0 },
-      fat_g: { type: "number", minimum: 0 },
-      fiber_g: { type: "number", minimum: 0 },
-      notes: { type: "string" },
-      ingredients: { type: "array", minItems: 2, items: ingredientSchema },
-      preparation_steps: {
-        type: "array",
-        minItems: 4,
-        maxItems: 8,
-        items: { type: "string", minLength: 20 },
-      },
-      prep_time_min: { type: "integer", minimum: 0 },
-      cook_time_min: { type: "integer", minimum: 0 },
-      servings: { type: "integer", minimum: 1 },
-      difficulty: { type: "string", enum: ["facil", "media", "alta"] },
-      tips: { type: "string" },
-      allergens: { type: "array", items: { type: "string" } },
-    },
-    required: [
-      "type",
-      "name",
-      "kcal",
-      "protein_g",
-      "carbs_g",
-      "fat_g",
-      "fiber_g",
-      "notes",
-      "ingredients",
-      "preparation_steps",
-      "prep_time_min",
-      "cook_time_min",
-      "servings",
-      "difficulty",
-      "tips",
-      "allergens",
-    ],
-  };
-
-  return {
-    type: "json_schema",
-    json_schema: {
-      name: "detailed_meal_day",
-      strict: true,
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          day: { type: "string", enum: [day] },
-          meals: {
-            type: "array",
-            minItems: 4,
-            maxItems: 4,
-            items: mealSchema,
-          },
-        },
-        required: ["day", "meals"],
-      },
-    },
-  };
 }
 
 function parseAndValidateMealDay(
@@ -436,22 +407,57 @@ function normalizeFood(value: string): string {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-async function readJsonBeforeDeadline(response: Response, deadlineAt: number): Promise<any> {
+/** Lee un stream SSE de chat/completions y acumula el contenido y el finish_reason. */
+async function readStreamedContent(
+  response: Response,
+  deadlineAt: number,
+): Promise<{ content: string; finishReason: string }> {
   const remainingMs = deadlineAt - Date.now();
   if (remainingMs <= 0) throw new Error("Se agoto el tiempo de generacion del plan");
 
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => {
-      void response.body?.cancel();
-      reject(new Error("Se agoto el tiempo de generacion del plan"));
-    }, remainingMs);
-  });
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let finishReason = "stop";
+  let timedOut = false;
+
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    void reader.cancel().catch(() => {});
+  }, remainingMs);
   try {
-    return await Promise.race([response.json(), timeout]);
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const chunk = JSON.parse(payload);
+          const choice = chunk.choices?.[0];
+          if (!choice) continue;
+          if (typeof choice.finish_reason === "string" && choice.finish_reason) {
+            finishReason = choice.finish_reason;
+          }
+          if (typeof choice.delta?.content === "string") {
+            content += choice.delta.content;
+          }
+        } catch {
+          // chunk parcial: ignorar
+        }
+      }
+    }
   } finally {
-    if (timeoutId !== undefined) clearTimeout(timeoutId);
+    clearTimeout(timeoutId);
   }
+  if (timedOut) throw new Error("Se agoto el tiempo de generacion del plan");
+  return { content, finishReason };
 }
 
 function extractJson(content: string): string | null {
